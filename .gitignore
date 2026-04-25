@@ -13,3 +13,6 @@ linux/
 macos/
 web/
 windows/
+.idea/
+.metadata
+*.iml

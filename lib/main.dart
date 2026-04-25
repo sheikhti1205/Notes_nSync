@@ -127,7 +127,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> {
     final bg = widget.accentTintBackground
         ? [
             BoxShadow(
-              color: widget.accent.withOpacity(dark ? 0.12 : 0.15),
+              color: widget.accent.withValues(alpha: dark ? 0.12 : 0.15),
               blurRadius: 120,
               spreadRadius: 40,
               offset: const Offset(-160, -120),
@@ -242,7 +242,7 @@ class AppHeader extends StatelessWidget {
       height: 70,
       padding: const EdgeInsets.symmetric(horizontal: 18),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.35))),
+        border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
       ),
       child: Row(
         children: [
@@ -260,7 +260,7 @@ class AppHeader extends StatelessWidget {
               leading: const Icon(Icons.search),
               hintText: 'Search notes or type a command...',
               trailing: const [Chip(label: Text('Ctrl')), Chip(label: Text('K'))],
-              padding: const MaterialStatePropertyAll(EdgeInsets.symmetric(horizontal: 14)),
+              padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 14)),
             ),
           ),
           const Spacer(),
@@ -311,7 +311,7 @@ class FolderSidebar extends StatelessWidget {
       width: width,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.35))),
+        border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
       ),
       child: ListView(
         children: [
@@ -586,7 +586,7 @@ class NotesColumn extends StatelessWidget {
       width: compact ? 260 : 320,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.35))),
+        border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
       ),
       child: Column(
         children: [
@@ -646,9 +646,11 @@ class NoteCard extends StatelessWidget {
           duration: const Duration(milliseconds: 160),
           padding: EdgeInsets.all(compact ? 12 : 16),
           decoration: BoxDecoration(
-            color: selected ? scheme.primaryContainer.withOpacity(0.35) : scheme.surfaceContainerHighest.withOpacity(0.45),
+            color: selected
+                ? scheme.primaryContainer.withValues(alpha: 0.35)
+                : scheme.surfaceContainerHighest.withValues(alpha: 0.45),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: selected ? scheme.primary.withOpacity(0.55) : scheme.outlineVariant),
+            border: Border.all(color: selected ? scheme.primary.withValues(alpha: 0.55) : scheme.outlineVariant),
           ),
           child: compact
               ? Text(note.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))
@@ -702,7 +704,7 @@ class Workspace extends StatelessWidget {
         Container(
           height: 70,
           padding: const EdgeInsets.symmetric(horizontal: 18),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.35)))),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35)))),
           child: Row(
             children: [
               Expanded(child: Text(selectedNote.title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
@@ -876,7 +878,7 @@ class AttachmentCard extends StatelessWidget {
             Container(
               height: 88,
               decoration: BoxDecoration(
-                color: file.color.withOpacity(0.22),
+                color: file.color.withValues(alpha: 0.22),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Center(child: Icon(file.icon, color: file.color, size: 32)),
@@ -901,7 +903,7 @@ class AttachmentRow extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: file.color.withOpacity(0.25),
+          backgroundColor: file.color.withValues(alpha: 0.25),
           child: Icon(file.icon, color: file.color),
         ),
         title: Text(file.name, style: const TextStyle(fontWeight: FontWeight.w800)),
@@ -920,7 +922,7 @@ class StatusBar extends StatelessWidget {
     return Container(
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.35)))),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35)))),
       child: const Row(
         children: [
           Text('Ln 19, Col 24'),
@@ -1036,7 +1038,7 @@ class SettingsDialog extends StatelessWidget {
                                     borderRadius: BorderRadius.circular(999),
                                     child: CircleAvatar(
                                       backgroundColor: color,
-                                      child: accent.value == color.value ? const Icon(Icons.check, color: Colors.white) : null,
+                                      child: accent.toARGB32() == color.toARGB32() ? const Icon(Icons.check, color: Colors.white) : null,
                                     ),
                                   ),
                               ],
