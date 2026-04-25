@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.libre_notes_settings.json
+sample_vault/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+android/
+ios/
+linux/
+macos/
+web/
+windows/
