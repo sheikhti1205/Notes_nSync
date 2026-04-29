@@ -1,4 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const LibreNotesApp());
@@ -16,10 +21,8 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
   bool amoledDark = false;
   bool accentTintBackground = true;
   bool letterIcons = true;
-  bool compactNotes = false;
-  bool attachmentPreviewCards = true;
-  bool sidebarCollapsed = false;
-  Color accent = const Color(0xFF5EEAD4);
+  bool denseNotes = false;
+  Color accent = const Color(0xFF14B8A6);
 
   @override
   Widget build(BuildContext context) {
@@ -36,13 +39,13 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: lightScheme,
-        fontFamily: 'Segoe UI',
+        visualDensity: VisualDensity.standard,
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
         colorScheme: darkScheme,
         scaffoldBackgroundColor: amoledDark ? Colors.black : const Color(0xFF0E1714),
-        fontFamily: 'Segoe UI',
+        visualDensity: VisualDensity.standard,
       ),
       home: LibreNotesHome(
         accent: accent,
@@ -50,17 +53,13 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
         amoledDark: amoledDark,
         accentTintBackground: accentTintBackground,
         letterIcons: letterIcons,
-        compactNotes: compactNotes,
-        attachmentPreviewCards: attachmentPreviewCards,
-        sidebarCollapsed: sidebarCollapsed,
+        denseNotes: denseNotes,
         onThemeModeChanged: (value) => setState(() => themeMode = value),
         onAmoledChanged: (value) => setState(() => amoledDark = value),
         onAccentChanged: (value) => setState(() => accent = value),
         onAccentTintChanged: (value) => setState(() => accentTintBackground = value),
         onLetterIconsChanged: (value) => setState(() => letterIcons = value),
-        onCompactNotesChanged: (value) => setState(() => compactNotes = value),
-        onAttachmentModeChanged: (value) => setState(() => attachmentPreviewCards = value),
-        onSidebarChanged: (value) => setState(() => sidebarCollapsed = value),
+        onDenseNotesChanged: (value) => setState(() => denseNotes = value),
       ),
     );
   }
@@ -74,17 +73,13 @@ class LibreNotesHome extends StatefulWidget {
     required this.amoledDark,
     required this.accentTintBackground,
     required this.letterIcons,
-    required this.compactNotes,
-    required this.attachmentPreviewCards,
-    required this.sidebarCollapsed,
+    required this.denseNotes,
     required this.onThemeModeChanged,
     required this.onAmoledChanged,
     required this.onAccentChanged,
     required this.onAccentTintChanged,
     required this.onLetterIconsChanged,
-    required this.onCompactNotesChanged,
-    required this.onAttachmentModeChanged,
-    required this.onSidebarChanged,
+    required this.onDenseNotesChanged,
   });
 
   final Color accent;
@@ -92,527 +87,818 @@ class LibreNotesHome extends StatefulWidget {
   final bool amoledDark;
   final bool accentTintBackground;
   final bool letterIcons;
-  final bool compactNotes;
-  final bool attachmentPreviewCards;
-  final bool sidebarCollapsed;
+  final bool denseNotes;
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final ValueChanged<bool> onAmoledChanged;
   final ValueChanged<Color> onAccentChanged;
   final ValueChanged<bool> onAccentTintChanged;
   final ValueChanged<bool> onLetterIconsChanged;
-  final ValueChanged<bool> onCompactNotesChanged;
-  final ValueChanged<bool> onAttachmentModeChanged;
-  final ValueChanged<bool> onSidebarChanged;
+  final ValueChanged<bool> onDenseNotesChanged;
 
   @override
   State<LibreNotesHome> createState() => _LibreNotesHomeState();
 }
 
-class _LibreNotesHomeState extends State<LibreNotesHome> {
-  final TextEditingController editor = TextEditingController(text: sampleNotes.first.markdown);
-  Note selectedNote = sampleNotes.first;
-  String selectedFolder = 'Libre Notes';
-  final Set<String> expandedFolders = {'Projects'};
+class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStateMixin {
+  final TextEditingController editor = TextEditingController();
+  final TextEditingController search = TextEditingController();
+  final GlobalKey<ScaffoldState> scaffoldKey = GlobalKey<ScaffoldState>();
+  late final TabController editorTabs;
+  final SharedPreferencesAsync prefs = SharedPreferencesAsync();
+  Timer? saveDebounce;
+
+  List<Note> notes = seedNotes;
+  String selectedNoteId = seedNotes.first.id;
+  String selectedFolder = 'All';
+  String query = '';
+  int compactPage = 0;
+  bool previewCards = true;
+  bool syncingEditor = false;
+
+  Color get accent => widget.accent;
+  ThemeMode get themeMode => widget.themeMode;
+  bool get amoledDark => widget.amoledDark;
+  bool get accentTintBackground => widget.accentTintBackground;
+  bool get letterIcons => widget.letterIcons;
+  bool get denseNotes => widget.denseNotes;
+  ValueChanged<ThemeMode> get onThemeModeChanged => widget.onThemeModeChanged;
+  ValueChanged<bool> get onAmoledChanged => widget.onAmoledChanged;
+  ValueChanged<Color> get onAccentChanged => widget.onAccentChanged;
+  ValueChanged<bool> get onAccentTintChanged => widget.onAccentTintChanged;
+  ValueChanged<bool> get onLetterIconsChanged => widget.onLetterIconsChanged;
+  ValueChanged<bool> get onDenseNotesChanged => widget.onDenseNotesChanged;
+
+  Note get selectedNote => notes.firstWhere((note) => note.id == selectedNoteId);
+
+  List<String> get folders {
+    final names = notes.map((note) => note.folder).toSet().toList()..sort();
+    return ['All', 'Starred', ...names];
+  }
+
+  List<Note> get visibleNotes {
+    final lowerQuery = query.trim().toLowerCase();
+    return notes.where((note) {
+      final folderMatch = selectedFolder == 'All' ||
+          (selectedFolder == 'Starred' && note.starred) ||
+          note.folder == selectedFolder;
+      final queryMatch = lowerQuery.isEmpty ||
+          note.title.toLowerCase().contains(lowerQuery) ||
+          note.body.toLowerCase().contains(lowerQuery) ||
+          note.tag.toLowerCase().contains(lowerQuery);
+      return folderMatch && queryMatch;
+    }).toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    editorTabs = TabController(length: 2, vsync: this);
+    editor.text = selectedNote.body;
+    editor.addListener(_updateSelectedNoteBody);
+    search.addListener(() => setState(() => query = search.text));
+    _loadVault();
+  }
 
   @override
   void dispose() {
+    saveDebounce?.cancel();
     editor.dispose();
+    search.dispose();
+    editorTabs.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadVault() async {
+    final raw = await prefs.getString(vaultStorageKey);
+    if (!mounted || raw == null || raw.isEmpty) {
+      return;
+    }
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      final restored = decoded
+          .map((item) => Note.fromJson(item as Map<String, dynamic>))
+          .toList();
+      if (restored.isEmpty) {
+        return;
+      }
+      setState(() {
+        notes = restored;
+        selectedNoteId = restored.first.id;
+        selectedFolder = 'All';
+        syncingEditor = true;
+        editor.text = restored.first.body;
+        syncingEditor = false;
+      });
+    } catch (_) {
+      _showSnack('Saved vault data could not be loaded. Seed notes are still available.');
+    }
+  }
+
+  void _queuePersist() {
+    saveDebounce?.cancel();
+    saveDebounce = Timer(const Duration(milliseconds: 450), () async {
+      final data = jsonEncode(notes.map((note) => note.toJson()).toList());
+      await prefs.setString(vaultStorageKey, data);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final bg = widget.accentTintBackground
-        ? [
-            BoxShadow(
-              color: widget.accent.withValues(alpha: dark ? 0.12 : 0.15),
-              blurRadius: 120,
-              spreadRadius: 40,
-              offset: const Offset(-160, -120),
-            ),
-          ]
-        : <BoxShadow>[];
-
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          boxShadow: bg,
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              AppHeader(
-                accent: widget.accent,
-                themeMode: widget.themeMode,
-                sidebarCollapsed: widget.sidebarCollapsed,
-                onToggleSidebar: () => widget.onSidebarChanged(!widget.sidebarCollapsed),
-                onQuickTheme: () => widget.onThemeModeChanged(
-                  widget.themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark,
-                ),
-                onOpenSettings: () => _openSettings(context),
-              ),
-              Expanded(
-                child: Row(
-                  children: [
-                    FolderSidebar(
-                      collapsed: widget.sidebarCollapsed,
-                      letterIcons: widget.letterIcons,
-                      expandedFolders: expandedFolders,
-                      selectedFolder: selectedFolder,
-                      onToggleFolder: (name) => setState(() {
-                        if (expandedFolders.contains(name)) {
-                          expandedFolders.remove(name);
-                        } else {
-                          expandedFolders.add(name);
-                        }
-                      }),
-                      onSelectFolder: (name) => setState(() => selectedFolder = name),
-                    ),
-                    NotesColumn(
-                      compact: widget.compactNotes,
-                      selected: selectedNote,
-                      onToggleCompact: () => widget.onCompactNotesChanged(!widget.compactNotes),
-                      onSelect: (note) => setState(() {
-                        selectedNote = note;
-                        editor.text = note.markdown;
-                      }),
-                    ),
-                    Expanded(
-                      child: Workspace(
-                        selectedNote: selectedNote,
-                        editor: editor,
-                        attachmentPreviewCards: widget.attachmentPreviewCards,
-                        onAttachmentModeChanged: widget.onAttachmentModeChanged,
-                        onOpenSettings: () => _openSettings(context),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openSettings(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => SettingsDialog(
-        accent: widget.accent,
-        themeMode: widget.themeMode,
-        amoledDark: widget.amoledDark,
-        accentTintBackground: widget.accentTintBackground,
-        letterIcons: widget.letterIcons,
-        onThemeModeChanged: widget.onThemeModeChanged,
-        onAmoledChanged: widget.onAmoledChanged,
-        onAccentChanged: widget.onAccentChanged,
-        onAccentTintChanged: widget.onAccentTintChanged,
-        onLetterIconsChanged: widget.onLetterIconsChanged,
-      ),
-    );
-  }
-}
-
-class AppHeader extends StatelessWidget {
-  const AppHeader({
-    super.key,
-    required this.accent,
-    required this.themeMode,
-    required this.sidebarCollapsed,
-    required this.onToggleSidebar,
-    required this.onQuickTheme,
-    required this.onOpenSettings,
-  });
-
-  final Color accent;
-  final ThemeMode themeMode;
-  final bool sidebarCollapsed;
-  final VoidCallback onToggleSidebar;
-  final VoidCallback onQuickTheme;
-  final VoidCallback onOpenSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 70,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            backgroundColor: accent,
-            foregroundColor: Colors.white,
-            child: const Text('L', style: TextStyle(fontWeight: FontWeight.w900)),
-          ),
-          const SizedBox(width: 12),
-          const Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-          const Spacer(),
-          SizedBox(
-            width: 460,
-            child: SearchBar(
-              leading: const Icon(Icons.search),
-              hintText: 'Search notes or type a command...',
-              trailing: const [Chip(label: Text('Ctrl')), Chip(label: Text('K'))],
-              padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 14)),
-            ),
-          ),
-          const Spacer(),
-          IconButton.filledTonal(
-            tooltip: sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar',
-            onPressed: onToggleSidebar,
-            icon: const Icon(Icons.view_sidebar_outlined),
-          ),
-          IconButton.filledTonal(
-            tooltip: 'Quick light/dark toggle',
-            onPressed: onQuickTheme,
-            icon: Icon(themeMode == ThemeMode.dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
-          ),
-          IconButton.filledTonal(
-            tooltip: 'Settings',
-            onPressed: onOpenSettings,
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class FolderSidebar extends StatelessWidget {
-  const FolderSidebar({
-    super.key,
-    required this.collapsed,
-    required this.letterIcons,
-    required this.expandedFolders,
-    required this.selectedFolder,
-    required this.onToggleFolder,
-    required this.onSelectFolder,
-  });
-
-  final bool collapsed;
-  final bool letterIcons;
-  final Set<String> expandedFolders;
-  final String selectedFolder;
-  final ValueChanged<String> onToggleFolder;
-  final ValueChanged<String> onSelectFolder;
-
-  @override
-  Widget build(BuildContext context) {
-    final width = collapsed ? 76.0 : 260.0;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      width: width,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
-      ),
-      child: ListView(
-        children: [
-          FilledButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.add),
-            label: collapsed ? const SizedBox.shrink() : const Text('New note'),
-          ),
-          const SizedBox(height: 18),
-          ...['Inbox', 'Starred', 'Drafts', 'Recent', 'Trash'].map((item) => SidebarTile.system(
-                name: item,
-                collapsed: collapsed,
-              )),
-          if (!collapsed) const SectionLabel('FOLDERS'),
-          FolderNode(
-            name: 'Personal',
-            color: Colors.lightBlue,
-            selectedFolder: selectedFolder,
-            collapsed: collapsed,
-            letterIcons: letterIcons,
-            onSelect: onSelectFolder,
-          ),
-          FolderNode(
-            name: 'Work',
-            color: Colors.deepPurple,
-            selectedFolder: selectedFolder,
-            collapsed: collapsed,
-            letterIcons: letterIcons,
-            onSelect: onSelectFolder,
-          ),
-          ExpandableFolderNode(
-            name: 'Projects',
-            color: Colors.deepOrange,
-            expanded: expandedFolders.contains('Projects'),
-            collapsed: collapsed,
-            letterIcons: letterIcons,
-            selectedFolder: selectedFolder,
-            onToggle: () => onToggleFolder('Projects'),
-            children: [
-              FolderNode(
-                name: 'Libre Notes',
-                color: Colors.teal,
-                selectedFolder: selectedFolder,
-                collapsed: collapsed,
-                letterIcons: letterIcons,
-                indent: true,
-                onSelect: onSelectFolder,
-              ),
-              FolderNode(
-                name: 'Website Redesign',
-                color: Colors.pink,
-                selectedFolder: selectedFolder,
-                collapsed: collapsed,
-                letterIcons: letterIcons,
-                indent: true,
-                onSelect: onSelectFolder,
-              ),
-            ],
-          ),
-          FolderNode(
-            name: 'Learn',
-            color: Colors.lightGreen,
-            selectedFolder: selectedFolder,
-            collapsed: collapsed,
-            letterIcons: letterIcons,
-            onSelect: onSelectFolder,
-          ),
-          SidebarTile.system(name: 'Archive', collapsed: collapsed, icon: Icons.archive_outlined),
-          if (!collapsed) const SectionLabel('TAGS'),
-          if (!collapsed)
-            const Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Chip(label: Text('# planning')),
-                Chip(label: Text('# ideas')),
-                Chip(label: Text('# reference')),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class SectionLabel extends StatelessWidget {
-  const SectionLabel(this.label, {super.key});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
-      child: Text(label, style: Theme.of(context).textTheme.labelLarge),
-    );
-  }
-}
-
-class SidebarTile extends StatelessWidget {
-  const SidebarTile.system({
-    super.key,
-    required this.name,
-    required this.collapsed,
-    this.icon,
-  })  : color = null,
-        letterIcons = false,
-        selected = false,
-        indent = false,
-        onTap = null;
-
-  const SidebarTile.folder({
-    super.key,
-    required this.name,
-    required this.collapsed,
-    required this.color,
-    required this.letterIcons,
-    required this.selected,
-    this.indent = false,
-    this.onTap,
-  }) : icon = null;
-
-  final String name;
-  final bool collapsed;
-  final IconData? icon;
-  final Color? color;
-  final bool letterIcons;
-  final bool selected;
-  final bool indent;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final actualIcon = icon ?? systemIcon(name);
-    final leading = color != null && letterIcons
-        ? CircleAvatar(
-            radius: 13,
-            backgroundColor: color,
-            child: Text(name.substring(0, 1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+    final tint = widget.accentTintBackground
+        ? BoxShadow(
+            color: widget.accent.withValues(alpha: dark ? 0.12 : 0.14),
+            blurRadius: 120,
+            spreadRadius: 30,
+            offset: const Offset(-120, -90),
           )
-        : Icon(actualIcon, size: 22);
+        : null;
 
-    return Padding(
-      padding: EdgeInsets.only(left: collapsed ? 0 : (indent ? 28 : 0), bottom: 4),
-      child: ListTile(
-        selected: selected,
-        dense: true,
-        minLeadingWidth: 28,
-        horizontalTitleGap: 8,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        leading: leading,
-        title: collapsed ? null : Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-        onTap: onTap,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final compact = width < 700;
+        final medium = width >= 700 && width < 1050;
+
+        return Scaffold(
+          key: scaffoldKey,
+          drawer: compact ? AppDrawer(home: this) : null,
+          appBar: compact ? _buildCompactAppBar() : null,
+          bottomNavigationBar: compact ? _buildBottomNavigation() : null,
+          floatingActionButton: compact && compactPage == 0
+              ? FloatingActionButton.extended(
+                  onPressed: _createNote,
+                  icon: const Icon(Icons.note_add_outlined),
+                  label: const Text('New'),
+                )
+              : null,
+          body: Container(
+            decoration: BoxDecoration(
+              color: scheme.surface,
+              boxShadow: tint == null ? null : [tint],
+            ),
+            child: SafeArea(
+              child: compact
+                  ? _CompactHome(home: this)
+                  : medium
+                      ? _MediumHome(home: this)
+                      : _ExpandedHome(home: this),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  PreferredSizeWidget _buildCompactAppBar() {
+    return AppBar(
+      title: Text(selectedNote.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      leading: IconButton(
+        tooltip: 'Menu',
+        icon: const Icon(Icons.menu),
+        onPressed: () => scaffoldKey.currentState?.openDrawer(),
+      ),
+      actions: [
+        IconButton(
+          tooltip: selectedNote.starred ? 'Unstar' : 'Star',
+          onPressed: _toggleStar,
+          icon: Icon(selectedNote.starred ? Icons.star : Icons.star_border),
+        ),
+        PopupMenuButton<String>(
+          onSelected: (value) {
+            switch (value) {
+              case 'rename':
+                _renameNote();
+                break;
+              case 'save':
+                _saveNote();
+                break;
+              case 'delete':
+                _deleteSelectedNote();
+                break;
+              case 'settings':
+                _openSettings();
+                break;
+            }
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: 'rename', child: Text('Rename')),
+            PopupMenuItem(value: 'save', child: Text('Save')),
+            PopupMenuItem(value: 'delete', child: Text('Delete')),
+            PopupMenuDivider(),
+            PopupMenuItem(value: 'settings', child: Text('Settings')),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomNavigation() {
+    return NavigationBar(
+      selectedIndex: compactPage,
+      onDestinationSelected: (value) => setState(() => compactPage = value),
+      destinations: const [
+        NavigationDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article), label: 'Notes'),
+        NavigationDestination(icon: Icon(Icons.edit_outlined), selectedIcon: Icon(Icons.edit), label: 'Edit'),
+        NavigationDestination(icon: Icon(Icons.visibility_outlined), selectedIcon: Icon(Icons.visibility), label: 'Preview'),
+        NavigationDestination(icon: Icon(Icons.attach_file), selectedIcon: Icon(Icons.attach_file), label: 'Files'),
+      ],
+    );
+  }
+
+  void _updateSelectedNoteBody() {
+    if (syncingEditor) {
+      return;
+    }
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    if (index == -1 || notes[index].body == editor.text) {
+      return;
+    }
+    setState(() {
+      notes[index] = notes[index].copyWith(
+        body: editor.text,
+        updatedAt: DateTime.now(),
+        wordCount: countWords(editor.text),
+      );
+    });
+    _queuePersist();
+  }
+
+  void _selectNote(Note note, {int? page}) {
+    setState(() {
+      selectedNoteId = note.id;
+      compactPage = page ?? compactPage;
+      syncingEditor = true;
+      editor.text = note.body;
+      syncingEditor = false;
+    });
+  }
+
+  void _selectFolder(String folder) {
+    setState(() {
+      selectedFolder = folder;
+      compactPage = 0;
+    });
+    final candidates = visibleNotes;
+    if (candidates.isNotEmpty && !candidates.any((note) => note.id == selectedNoteId)) {
+      _selectNote(candidates.first);
+    }
+  }
+
+  void _createNote() {
+    final folder = selectedFolder == 'All' || selectedFolder == 'Starred' ? 'Inbox' : selectedFolder;
+    final now = DateTime.now();
+    final note = Note(
+      id: now.microsecondsSinceEpoch.toString(),
+      title: 'Untitled note',
+      folder: folder,
+      tag: '#draft',
+      summary: 'Start writing. The preview updates as you type.',
+      body: '# Untitled note\n\nStart writing in Markdown.\n\n- Draft ideas\n- Add attachments\n- Preview on the next tab\n',
+      updatedAt: now,
+      wordCount: 13,
+      attachments: const [],
+    );
+    setState(() {
+      notes = [note, ...notes];
+      selectedNoteId = note.id;
+      compactPage = 1;
+      syncingEditor = true;
+      editor.text = note.body;
+      syncingEditor = false;
+    });
+    _queuePersist();
+  }
+
+  void _toggleStar() {
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    setState(() {
+      notes[index] = notes[index].copyWith(starred: !notes[index].starred);
+    });
+    _queuePersist();
+  }
+
+  Future<void> _renameNote() async {
+    final titleController = TextEditingController(text: selectedNote.title);
+    final folderController = TextEditingController(text: selectedNote.folder);
+    final tagController = TextEditingController(text: selectedNote.tag);
+    final result = await showDialog<NoteEditResult>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Note details'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: titleController, decoration: const InputDecoration(labelText: 'Title')),
+              const SizedBox(height: 12),
+              TextField(controller: folderController, decoration: const InputDecoration(labelText: 'Folder')),
+              const SizedBox(height: 12),
+              TextField(controller: tagController, decoration: const InputDecoration(labelText: 'Tag')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(
+              context,
+              NoteEditResult(
+                titleController.text.trim(),
+                folderController.text.trim(),
+                tagController.text.trim(),
+              ),
+            ),
+            child: const Text('Apply'),
+          ),
+        ],
       ),
     );
+    titleController.dispose();
+    folderController.dispose();
+    tagController.dispose();
+    if (result == null || result.title.isEmpty || result.folder.isEmpty || result.tag.isEmpty) {
+      return;
+    }
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    setState(() {
+      notes[index] = notes[index].copyWith(
+        title: result.title,
+        folder: result.folder,
+        tag: result.tag.startsWith('#') ? result.tag : '#${result.tag}',
+        updatedAt: DateTime.now(),
+      );
+      selectedFolder = result.folder;
+    });
+    _queuePersist();
   }
-}
 
-class FolderNode extends StatelessWidget {
-  const FolderNode({
-    super.key,
-    required this.name,
-    required this.color,
-    required this.selectedFolder,
-    required this.collapsed,
-    required this.letterIcons,
-    required this.onSelect,
-    this.indent = false,
-  });
+  void _deleteSelectedNote() {
+    if (notes.length == 1) {
+      _showSnack('Keep at least one note in the vault.');
+      return;
+    }
+    final deletedTitle = selectedNote.title;
+    setState(() {
+      notes = notes.where((note) => note.id != selectedNoteId).toList();
+      selectedNoteId = notes.first.id;
+      syncingEditor = true;
+      editor.text = notes.first.body;
+      syncingEditor = false;
+      compactPage = 0;
+    });
+    _queuePersist();
+    _showSnack('$deletedTitle moved out of the sample vault.');
+  }
 
-  final String name;
-  final Color color;
-  final String selectedFolder;
-  final bool collapsed;
-  final bool letterIcons;
-  final bool indent;
-  final ValueChanged<String> onSelect;
+  Future<void> _createFolder() async {
+    final controller = TextEditingController();
+    final folder = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New folder'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Folder name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Create')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (folder == null || folder.isEmpty) {
+      return;
+    }
+    setState(() => selectedFolder = folder);
+    _createNote();
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return SidebarTile.folder(
-      name: name,
-      collapsed: collapsed,
-      color: color,
-      letterIcons: letterIcons,
-      selected: selectedFolder == name,
-      indent: indent,
-      onTap: () => onSelect(name),
+  Future<void> _addAttachment() async {
+    final nameController = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Attach file'),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Filename',
+            hintText: 'diagram.png, notes.pdf, audio.m4a',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, nameController.text.trim()), child: const Text('Attach')),
+        ],
+      ),
+    );
+    nameController.dispose();
+    if (result == null || result.isEmpty) {
+      return;
+    }
+    final file = AttachmentFile.fromName(result);
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    setState(() {
+      notes[index] = notes[index].copyWith(
+        attachments: [...notes[index].attachments, file],
+        updatedAt: DateTime.now(),
+      );
+    });
+    _queuePersist();
+  }
+
+  void _removeAttachment(AttachmentFile file) {
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    setState(() {
+      notes[index] = notes[index].copyWith(
+        attachments: notes[index].attachments.where((item) => item.name != file.name).toList(),
+      );
+    });
+    _queuePersist();
+  }
+
+  void _setPreviewCards(bool value) {
+    setState(() => previewCards = value);
+  }
+
+  void _saveNote() {
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    setState(() {
+      notes[index] = notes[index].copyWith(updatedAt: DateTime.now(), wordCount: countWords(editor.text));
+    });
+    _queuePersist();
+    _showSnack('${selectedNote.title} saved locally.');
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _openSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SettingsSheet(home: this),
     );
   }
 }
 
-class ExpandableFolderNode extends StatelessWidget {
-  const ExpandableFolderNode({
-    super.key,
-    required this.name,
-    required this.color,
-    required this.expanded,
-    required this.collapsed,
-    required this.letterIcons,
-    required this.selectedFolder,
-    required this.onToggle,
-    required this.children,
-  });
+class _CompactHome extends StatelessWidget {
+  const _CompactHome({required this.home});
 
-  final String name;
-  final Color color;
-  final bool expanded;
-  final bool collapsed;
-  final bool letterIcons;
-  final String selectedFolder;
-  final VoidCallback onToggle;
-  final List<Widget> children;
+  final _LibreNotesHomeState home;
 
   @override
   Widget build(BuildContext context) {
-    if (collapsed) {
-      return SidebarTile.folder(
-        name: name,
-        collapsed: true,
-        color: color,
-        letterIcons: letterIcons,
-        selected: selectedFolder == name,
-        onTap: onToggle,
-      );
-    }
-    return Column(
+    return IndexedStack(
+      sizing: StackFit.expand,
+      index: home.compactPage,
       children: [
-        ListTile(
-          dense: true,
-          selected: selectedFolder == name,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          leading: letterIcons
-              ? CircleAvatar(
-                  radius: 13,
-                  backgroundColor: color,
-                  child: Text(name.substring(0, 1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
-                )
-              : const Icon(Icons.folder_open_outlined),
-          title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
-          onTap: onToggle,
-        ),
-        AnimatedCrossFade(
-          firstChild: const SizedBox.shrink(),
-          secondChild: Column(children: children),
-          crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-          duration: const Duration(milliseconds: 160),
+        NotesPane(home: home, fullWidth: true),
+        EditorPane(home: home, compact: true),
+        PreviewPane(note: home.selectedNote, compact: true),
+        AttachmentsPane(home: home, compact: true),
+      ],
+    );
+  }
+}
+
+class _MediumHome extends StatelessWidget {
+  const _MediumHome({required this.home});
+
+  final _LibreNotesHomeState home;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        FolderRail(home: home, railOnly: true),
+        SizedBox(width: 310, child: NotesPane(home: home)),
+        Expanded(
+          child: EditorPreviewTabs(home: home),
         ),
       ],
     );
   }
 }
 
-class NotesColumn extends StatelessWidget {
-  const NotesColumn({
-    super.key,
-    required this.compact,
-    required this.selected,
-    required this.onToggleCompact,
-    required this.onSelect,
-  });
+class _ExpandedHome extends StatelessWidget {
+  const _ExpandedHome({required this.home});
 
-  final bool compact;
-  final Note selected;
-  final VoidCallback onToggleCompact;
-  final ValueChanged<Note> onSelect;
+  final _LibreNotesHomeState home;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: compact ? 260 : 320,
-      padding: const EdgeInsets.all(14),
+    return Row(
+      children: [
+        SizedBox(width: 252, child: FolderRail(home: home)),
+        SizedBox(width: home.denseNotes ? 280 : 332, child: NotesPane(home: home)),
+        Expanded(
+          child: Column(
+            children: [
+              WorkspaceToolbar(home: home),
+              Expanded(
+                child: Row(
+                  children: [
+                    Expanded(child: EditorPane(home: home)),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: PreviewPane(note: home.selectedNote)),
+                  ],
+                ),
+              ),
+              AttachmentsPane(home: home),
+              StatusBar(note: home.selectedNote),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class AppDrawer extends StatelessWidget {
+  const AppDrawer({super.key, required this.home});
+
+  final _LibreNotesHomeState home;
+
+  @override
+  Widget build(BuildContext context) {
+    return NavigationDrawer(
+      selectedIndex: home.folders.indexOf(home.selectedFolder).clamp(0, home.folders.length - 1).toInt(),
+      onDestinationSelected: (index) {
+        Navigator.pop(context);
+        home._selectFolder(home.folders[index]);
+      },
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 16, 18),
+          child: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: home.accent,
+                foregroundColor: Colors.white,
+                child: const Text('L', style: TextStyle(fontWeight: FontWeight.w900)),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              ),
+            ],
+          ),
+        ),
+        for (final folder in home.folders)
+          NavigationDrawerDestination(
+            icon: Icon(folderIcon(folder)),
+            selectedIcon: Icon(folderIcon(folder, selected: true)),
+            label: Text(folder),
+          ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.create_new_folder_outlined),
+          title: const Text('New folder'),
+          onTap: () {
+            Navigator.pop(context);
+            home._createFolder();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.settings_outlined),
+          title: const Text('Settings'),
+          onTap: () {
+            Navigator.pop(context);
+            home._openSettings();
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class FolderRail extends StatelessWidget {
+  const FolderRail({super.key, required this.home, this.railOnly = false});
+
+  final _LibreNotesHomeState home;
+  final bool railOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedIndex = home.folders.indexOf(home.selectedFolder).clamp(0, home.folders.length - 1).toInt();
+    if (railOnly) {
+      return NavigationRail(
+        selectedIndex: selectedIndex,
+        onDestinationSelected: (index) => home._selectFolder(home.folders[index]),
+        labelType: NavigationRailLabelType.selected,
+        leading: Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: IconButton.filled(
+            tooltip: 'New note',
+            onPressed: home._createNote,
+            icon: const Icon(Icons.add),
+          ),
+        ),
+        trailing: Expanded(
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: IconButton(
+                tooltip: 'Settings',
+                onPressed: home._openSettings,
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ),
+          ),
+        ),
+        destinations: [
+          for (final folder in home.folders)
+            NavigationRailDestination(
+              icon: Icon(folderIcon(folder)),
+              selectedIcon: Icon(folderIcon(folder, selected: true)),
+              label: Text(folder),
+            ),
+        ],
+      );
+    }
+
+    return DecoratedBox(
       decoration: BoxDecoration(
         border: Border(right: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
       ),
-      child: Column(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
         children: [
           Row(
             children: [
-              const Expanded(child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800))),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.sort)),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.tune)),
-              IconButton(onPressed: onToggleCompact, icon: const Icon(Icons.view_headline)),
+              CircleAvatar(
+                backgroundColor: home.accent,
+                foregroundColor: Colors.white,
+                child: const Text('L', style: TextStyle(fontWeight: FontWeight.w900)),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+              ),
             ],
           ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: home._createNote,
+            icon: const Icon(Icons.note_add_outlined),
+            label: const Text('New note'),
+          ),
+          OutlinedButton.icon(
+            onPressed: home._createFolder,
+            icon: const Icon(Icons.create_new_folder_outlined),
+            label: const Text('New folder'),
+          ),
+          const SizedBox(height: 14),
+          Text('Vault', style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
-          Expanded(
-            child: ListView.separated(
-              itemCount: sampleNotes.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final note = sampleNotes[index];
-                return NoteCard(
-                  note: note,
-                  compact: compact,
-                  selected: selected.title == note.title,
-                  onTap: () => onSelect(note),
-                );
-              },
+          for (final folder in home.folders)
+            FolderTile(
+              name: folder,
+              selected: folder == home.selectedFolder,
+              letterIcons: home.letterIcons,
+              onTap: () => home._selectFolder(folder),
             ),
+          const SizedBox(height: 18),
+          Text('Tags', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final tag in notesTags(home.notes)) ActionChip(label: Text(tag), onPressed: () => home.search.text = tag),
+            ],
+          ),
+          const SizedBox(height: 20),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('Settings'),
+            onTap: home._openSettings,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class FolderTile extends StatelessWidget {
+  const FolderTile({
+    super.key,
+    required this.name,
+    required this.selected,
+    required this.letterIcons,
+    required this.onTap,
+  });
+
+  final String name;
+  final bool selected;
+  final bool letterIcons;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      selected: selected,
+      dense: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      leading: letterIcons && name != 'All' && name != 'Starred'
+          ? CircleAvatar(
+              radius: 14,
+              child: Text(name.substring(0, 1), style: const TextStyle(fontWeight: FontWeight.w900)),
+            )
+          : Icon(folderIcon(name, selected: selected)),
+      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      onTap: onTap,
+    );
+  }
+}
+
+class NotesPane extends StatelessWidget {
+  const NotesPane({super.key, required this.home, this.fullWidth = false});
+
+  final _LibreNotesHomeState home;
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final notes = home.visibleNotes;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: fullWidth ? null : Border(right: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        home.selectedFolder,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    IconButton(tooltip: 'Sort', onPressed: () {}, icon: const Icon(Icons.sort)),
+                    IconButton(tooltip: 'Dense notes', onPressed: () => home.onDenseNotesChanged(!home.denseNotes), icon: const Icon(Icons.view_headline)),
+                  ],
+                ),
+                SearchBar(
+                  controller: home.search,
+                  leading: const Icon(Icons.search),
+                  hintText: 'Search notes',
+                  trailing: home.query.isEmpty
+                      ? null
+                      : [
+                          IconButton(
+                            tooltip: 'Clear',
+                            onPressed: home.search.clear,
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: notes.isEmpty
+                ? EmptyState(
+                    icon: Icons.search_off,
+                    title: 'No notes found',
+                    action: 'Create note',
+                    onPressed: home._createNote,
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 90),
+                    itemCount: notes.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final note = notes[index];
+                      return NoteCard(
+                        note: note,
+                        dense: home.denseNotes,
+                        selected: note.id == home.selectedNoteId,
+                        onTap: () => home._selectNote(note, page: 1),
+                        onStar: () {
+                          home._selectNote(note);
+                          home._toggleStar();
+                        },
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -624,238 +910,338 @@ class NoteCard extends StatelessWidget {
   const NoteCard({
     super.key,
     required this.note,
-    required this.compact,
+    required this.dense,
     required this.selected,
     required this.onTap,
+    required this.onStar,
   });
 
   final Note note;
-  final bool compact;
+  final bool dense;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onStar;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: '${note.title}\n${note.summary}\nOpen · Star · Rename',
-      child: InkWell(
-        onTap: onTap,
+    return Card(
+      margin: EdgeInsets.zero,
+      color: selected ? scheme.primaryContainer.withValues(alpha: 0.45) : scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          padding: EdgeInsets.all(compact ? 12 : 16),
-          decoration: BoxDecoration(
-            color: selected
-                ? scheme.primaryContainer.withValues(alpha: 0.35)
-                : scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: selected ? scheme.primary.withValues(alpha: 0.55) : scheme.outlineVariant),
+        side: BorderSide(color: selected ? scheme.primary.withValues(alpha: 0.55) : scheme.outlineVariant),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.all(dense ? 10 : 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      note.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: note.starred ? 'Unstar' : 'Star',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onStar,
+                    icon: Icon(note.starred ? Icons.star : Icons.star_border, size: 20),
+                  ),
+                ],
+              ),
+              if (!dense) ...[
+                const SizedBox(height: 6),
+                Text(note.summary, maxLines: 2, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 10),
+              ],
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Chip(label: Text(note.tag), visualDensity: VisualDensity.compact),
+                  Text(relativeDate(note.updatedAt), style: Theme.of(context).textTheme.labelMedium),
+                  Text('${note.wordCount} words', style: Theme.of(context).textTheme.labelMedium),
+                  if (note.attachments.isNotEmpty)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.attach_file, size: 16),
+                        Text('${note.attachments.length}', style: Theme.of(context).textTheme.labelMedium),
+                      ],
+                    ),
+                ],
+              ),
+            ],
           ),
-          child: compact
-              ? Text(note.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(child: Text(note.title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
-                        const Icon(Icons.star_border, size: 20),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Text(note.summary, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        const Text('Today', style: TextStyle(fontWeight: FontWeight.w700)),
-                        const Spacer(),
-                        Chip(label: Text(note.tag)),
-                      ],
-                    ),
-                  ],
-                ),
         ),
       ),
     );
   }
 }
 
-class Workspace extends StatelessWidget {
-  const Workspace({
-    super.key,
-    required this.selectedNote,
-    required this.editor,
-    required this.attachmentPreviewCards,
-    required this.onAttachmentModeChanged,
-    required this.onOpenSettings,
-  });
+class WorkspaceToolbar extends StatelessWidget {
+  const WorkspaceToolbar({super.key, required this.home});
 
-  final Note selectedNote;
-  final TextEditingController editor;
-  final bool attachmentPreviewCards;
-  final ValueChanged<bool> onAttachmentModeChanged;
-  final VoidCallback onOpenSettings;
+  final _LibreNotesHomeState home;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              home.selectedNote.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+            ),
+          ),
+          IconButton.filledTonal(tooltip: 'Rename', onPressed: home._renameNote, icon: const Icon(Icons.drive_file_rename_outline)),
+          IconButton.filledTonal(tooltip: 'Save', onPressed: home._saveNote, icon: const Icon(Icons.save_outlined)),
+          IconButton.filledTonal(tooltip: 'Attach', onPressed: home._addAttachment, icon: const Icon(Icons.attach_file)),
+          IconButton.filledTonal(tooltip: 'Settings', onPressed: home._openSettings, icon: const Icon(Icons.palette_outlined)),
+        ],
+      ),
+    );
+  }
+}
+
+class EditorPreviewTabs extends StatelessWidget {
+  const EditorPreviewTabs({super.key, required this.home});
+
+  final _LibreNotesHomeState home;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Container(
-          height: 70,
-          padding: const EdgeInsets.symmetric(horizontal: 18),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35)))),
-          child: Row(
-            children: [
-              Expanded(child: Text(selectedNote.title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900))),
-              IconButton.filledTonal(onPressed: () {}, icon: const Icon(Icons.edit_outlined)),
-              IconButton.filledTonal(onPressed: () {}, icon: const Icon(Icons.copy_outlined)),
-              IconButton.filledTonal(onPressed: onOpenSettings, icon: const Icon(Icons.palette_outlined)),
-              IconButton.filledTonal(onPressed: () {}, icon: const Icon(Icons.refresh)),
-            ],
-          ),
+        WorkspaceToolbar(home: home),
+        TabBar(
+          controller: home.editorTabs,
+          tabs: const [
+            Tab(icon: Icon(Icons.edit_outlined), text: 'Edit'),
+            Tab(icon: Icon(Icons.visibility_outlined), text: 'Preview'),
+          ],
         ),
         Expanded(
-          child: Row(
+          child: TabBarView(
+            controller: home.editorTabs,
             children: [
-              Expanded(
-                child: Pane(
-                  label: 'Edit',
-                  child: TextField(
-                    controller: editor,
-                    expands: true,
-                    maxLines: null,
-                    minLines: null,
-                    style: const TextStyle(fontFamily: 'Consolas', fontSize: 16),
-                    decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(18)),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Pane(
-                  label: 'Preview',
-                  child: MarkdownPreview(text: editor.text),
-                ),
-              ),
+              EditorPane(home: home),
+              PreviewPane(note: home.selectedNote),
             ],
           ),
         ),
-        AttachmentShelf(
-          previewCards: attachmentPreviewCards,
-          onModeChanged: onAttachmentModeChanged,
-        ),
-        const StatusBar(),
+        AttachmentsPane(home: home),
       ],
     );
   }
 }
 
-class Pane extends StatelessWidget {
-  const Pane({super.key, required this.label, required this.child});
+class EditorPane extends StatelessWidget {
+  const EditorPane({super.key, required this.home, this.compact = false});
 
-  final String label;
-  final Widget child;
+  final _LibreNotesHomeState home;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(compact ? 12 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Chip(label: Text(label)),
-          const SizedBox(height: 10),
-          Expanded(child: child),
+          if (compact)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: NoteHeader(home: home),
+            ),
+          Expanded(
+            child: TextField(
+              controller: home.editor,
+              expands: true,
+              maxLines: null,
+              minLines: null,
+              textAlignVertical: TextAlignVertical.top,
+              keyboardType: TextInputType.multiline,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: compact ? 15 : 16,
+                height: 1.45,
+              ),
+              decoration: InputDecoration(
+                filled: true,
+                hintText: 'Write Markdown here...',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: EdgeInsets.all(compact ? 14 : 18),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class MarkdownPreview extends StatelessWidget {
-  const MarkdownPreview({super.key, required this.text});
+class PreviewPane extends StatelessWidget {
+  const PreviewPane({super.key, required this.note, this.compact = false});
 
-  final String text;
+  final Note note;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    final blocks = text.split('\n');
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(26),
-      decoration: BoxDecoration(
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: ListView(
+    return Padding(
+      padding: EdgeInsets.all(compact ? 12 : 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final line in blocks)
-            if (line.startsWith('# '))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 20),
-                child: Text(line.substring(2), style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900)),
-              )
-            else if (line.startsWith('## '))
-              Padding(
-                padding: const EdgeInsets.only(top: 18, bottom: 8),
-                child: Text(line.substring(3), style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
-              )
-            else if (line.startsWith('- '))
-              Text('• ${line.substring(2)}', style: const TextStyle(fontSize: 16, height: 1.6))
-            else if (line.startsWith('|'))
-              Text(line, style: TextStyle(fontFamily: 'Consolas', color: Theme.of(context).colorScheme.primary))
-            else if (line.trim().isEmpty)
-              const SizedBox(height: 8)
-            else
-              Text(line, style: const TextStyle(fontSize: 16, height: 1.55)),
+          if (compact)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: NoteHeader(note: note),
+            ),
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLow.withValues(alpha: 0.65),
+                border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Markdown(
+                data: note.body,
+                selectable: true,
+                padding: EdgeInsets.all(compact ? 18 : 24),
+                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                  h1: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+                  h2: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                  p: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55),
+                  codeblockDecoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  blockquoteDecoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.35),
+                    border: Border(left: BorderSide(color: Theme.of(context).colorScheme.primary, width: 4)),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class AttachmentShelf extends StatelessWidget {
-  const AttachmentShelf({
-    super.key,
-    required this.previewCards,
-    required this.onModeChanged,
-  });
+class NoteHeader extends StatelessWidget {
+  const NoteHeader({super.key, this.home, this.note});
 
-  final bool previewCards;
-  final ValueChanged<bool> onModeChanged;
+  final _LibreNotesHomeState? home;
+  final Note? note;
 
   @override
   Widget build(BuildContext context) {
+    final current = note ?? home!.selectedNote;
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(current.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+              Text('${current.folder}  -  ${current.tag}', maxLines: 1, overflow: TextOverflow.ellipsis),
+            ],
+          ),
+        ),
+        if (home != null) ...[
+          IconButton(tooltip: 'Rename', onPressed: home!._renameNote, icon: const Icon(Icons.drive_file_rename_outline)),
+          IconButton(tooltip: 'Save', onPressed: home!._saveNote, icon: const Icon(Icons.save_outlined)),
+        ],
+      ],
+    );
+  }
+}
+
+class AttachmentsPane extends StatelessWidget {
+  const AttachmentsPane({super.key, required this.home, this.compact = false});
+
+  final _LibreNotesHomeState home;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final attachments = home.selectedNote.attachments;
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      constraints: BoxConstraints(maxHeight: compact ? double.infinity : 178),
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, 10, compact ? 12 : 16, compact ? 80 : 12),
+      decoration: compact
+          ? null
+          : BoxDecoration(
+              border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35))),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Attachments', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
-                    Text('Choose filename rows or richer file previews.'),
+              Expanded(
+                child: Text('Attachments', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+              ),
+              if (!compact)
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: true, icon: Icon(Icons.grid_view), label: Text('Cards')),
+                    ButtonSegment(value: false, icon: Icon(Icons.list), label: Text('Rows')),
                   ],
+                  selected: {home.previewCards},
+                  onSelectionChanged: (value) => home._setPreviewCards(value.first),
                 ),
-              ),
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: true, icon: Icon(Icons.grid_view), label: Text('Preview')),
-                  ButtonSegment(value: false, icon: Icon(Icons.list), label: Text('Filename')),
-                ],
-                selected: {previewCards},
-                onSelectionChanged: (value) => onModeChanged(value.first),
-              ),
+              IconButton.filledTonal(tooltip: 'Attach file', onPressed: home._addAttachment, icon: const Icon(Icons.add)),
             ],
           ),
           const SizedBox(height: 10),
-          previewCards
-              ? Row(children: attachments.map((file) => Expanded(child: AttachmentCard(file: file))).toList())
-              : Column(children: attachments.map((file) => AttachmentRow(file: file)).toList()),
+          Expanded(
+            child: attachments.isEmpty
+                ? EmptyState(
+                    icon: Icons.attach_file,
+                    title: 'No attachments yet',
+                    action: 'Attach',
+                    onPressed: home._addAttachment,
+                  )
+                : home.previewCards && !compact
+                    ? ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: attachments.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        itemBuilder: (context, index) => SizedBox(
+                          width: 210,
+                          child: AttachmentCard(file: attachments[index], onRemove: () => home._removeAttachment(attachments[index])),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: attachments.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) => AttachmentRow(file: attachments[index], onRemove: () => home._removeAttachment(attachments[index])),
+                      ),
+          ),
         ],
       ),
     );
@@ -863,28 +1249,32 @@ class AttachmentShelf extends StatelessWidget {
 }
 
 class AttachmentCard extends StatelessWidget {
-  const AttachmentCard({super.key, required this.file});
+  const AttachmentCard({super.key, required this.file, required this.onRemove});
 
   final AttachmentFile file;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              height: 88,
-              decoration: BoxDecoration(
-                color: file.color.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(child: Icon(file.icon, color: file.color, size: 32)),
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: file.color.withValues(alpha: 0.18),
+                  child: Icon(file.icon, color: file.color),
+                ),
+                const Spacer(),
+                IconButton(tooltip: 'Remove', onPressed: onRemove, icon: const Icon(Icons.close, size: 18)),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const Spacer(),
+            Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
             Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
           ],
         ),
@@ -894,270 +1284,277 @@ class AttachmentCard extends StatelessWidget {
 }
 
 class AttachmentRow extends StatelessWidget {
-  const AttachmentRow({super.key, required this.file});
+  const AttachmentRow({super.key, required this.file, required this.onRemove});
 
   final AttachmentFile file;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: EdgeInsets.zero,
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: file.color.withValues(alpha: 0.25),
+          backgroundColor: file.color.withValues(alpha: 0.2),
           child: Icon(file.icon, color: file.color),
         ),
-        title: Text(file.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-        subtitle: Text(file.meta),
-        trailing: const Icon(Icons.more_vert),
+        title: Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+        subtitle: Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: IconButton(tooltip: 'Remove', onPressed: onRemove, icon: const Icon(Icons.close)),
+      ),
+    );
+  }
+}
+
+class SettingsSheet extends StatelessWidget {
+  const SettingsSheet({super.key, required this.home});
+
+  final _LibreNotesHomeState home;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.88),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          children: [
+            Text('Settings', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 16),
+            SettingBlock(
+              title: 'Theme',
+              child: SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.monitor_outlined), label: Text('Auto')),
+                  ButtonSegment(value: ThemeMode.light, icon: Icon(Icons.light_mode_outlined), label: Text('Light')),
+                  ButtonSegment(value: ThemeMode.dark, icon: Icon(Icons.dark_mode_outlined), label: Text('Dark')),
+                ],
+                selected: {home.themeMode},
+                onSelectionChanged: (value) => home.onThemeModeChanged(value.first),
+              ),
+            ),
+            SwitchListTile(
+              title: const Text('AMOLED dark'),
+              subtitle: const Text('Use true black app surfaces in dark mode.'),
+              value: home.amoledDark,
+              onChanged: home.onAmoledChanged,
+            ),
+            SwitchListTile(
+              title: const Text('Accent-tinted background'),
+              subtitle: const Text('Tint large surfaces with the selected accent color.'),
+              value: home.accentTintBackground,
+              onChanged: home.onAccentTintChanged,
+            ),
+            SwitchListTile(
+              title: const Text('Letter folder icons'),
+              subtitle: const Text('Show folder initials when there is room.'),
+              value: home.letterIcons,
+              onChanged: home.onLetterIconsChanged,
+            ),
+            SwitchListTile(
+              title: const Text('Dense notes'),
+              subtitle: const Text('Fit more notes on smaller screens.'),
+              value: home.denseNotes,
+              onChanged: home.onDenseNotesChanged,
+            ),
+            SettingBlock(
+              title: 'Accent color',
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final color in accentChoices)
+                    InkWell(
+                      onTap: () => home.onAccentChanged(color),
+                      borderRadius: BorderRadius.circular(999),
+                      child: CircleAvatar(
+                        radius: 22,
+                        backgroundColor: color,
+                        child: home.accent == color ? const Icon(Icons.check, color: Colors.white) : null,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SettingBlock extends StatelessWidget {
+  const SettingBlock({super.key, required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 10),
+          child,
+        ],
       ),
     );
   }
 }
 
 class StatusBar extends StatelessWidget {
-  const StatusBar({super.key});
+  const StatusBar({super.key, required this.note});
+
+  final Note note;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.35)))),
-      child: const Row(
+      child: Row(
         children: [
-          Text('Ln 19, Col 24'),
-          Spacer(),
-          Text('Markdown'),
-          Spacer(),
-          Icon(Icons.check_circle_outline, size: 16),
-          SizedBox(width: 6),
-          Text('Autosaved'),
-          Spacer(),
-          Text('168 words'),
+          Text(relativeDate(note.updatedAt)),
+          const Spacer(),
+          Text('${note.wordCount} words'),
+          const Spacer(),
+          const Icon(Icons.check_circle_outline, size: 16),
+          const SizedBox(width: 6),
+          const Text('Autosaved'),
         ],
       ),
     );
   }
 }
 
-class SettingsDialog extends StatelessWidget {
-  const SettingsDialog({
+class EmptyState extends StatelessWidget {
+  const EmptyState({
     super.key,
-    required this.accent,
-    required this.themeMode,
-    required this.amoledDark,
-    required this.accentTintBackground,
-    required this.letterIcons,
-    required this.onThemeModeChanged,
-    required this.onAmoledChanged,
-    required this.onAccentChanged,
-    required this.onAccentTintChanged,
-    required this.onLetterIconsChanged,
+    required this.icon,
+    required this.title,
+    required this.action,
+    required this.onPressed,
   });
 
-  final Color accent;
-  final ThemeMode themeMode;
-  final bool amoledDark;
-  final bool accentTintBackground;
-  final bool letterIcons;
-  final ValueChanged<ThemeMode> onThemeModeChanged;
-  final ValueChanged<bool> onAmoledChanged;
-  final ValueChanged<Color> onAccentChanged;
-  final ValueChanged<bool> onAccentTintChanged;
-  final ValueChanged<bool> onLetterIconsChanged;
+  final IconData icon;
+  final String title;
+  final String action;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      child: SizedBox(
-        width: 1040,
-        height: 680,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  const Expanded(child: Text('Libre Notes Preferences', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900))),
-                  IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-                ],
-              ),
-              const SearchBar(leading: Icon(Icons.search), hintText: 'Search settings'),
-              const SizedBox(height: 14),
-              Expanded(
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 220,
-                      child: ListView(
-                        children: const [
-                          ListTile(selected: true, leading: Icon(Icons.auto_awesome), title: Text('Commonly Used')),
-                          ListTile(leading: Icon(Icons.palette_outlined), title: Text('Appearance')),
-                          ListTile(leading: Icon(Icons.text_fields), title: Text('Editor')),
-                          ListTile(leading: Icon(Icons.folder_open), title: Text('Files')),
-                          ListTile(leading: Icon(Icons.attach_file), title: Text('Attachments')),
-                          ListTile(leading: Icon(Icons.security), title: Text('Privacy')),
-                        ],
-                      ),
-                    ),
-                    const VerticalDivider(),
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.only(left: 22),
-                        children: [
-                          const Text('Commonly Used', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900)),
-                          const SizedBox(height: 18),
-                          SettingRow(
-                            title: 'Workbench: Color Theme',
-                            description: 'Controls light and dark appearance across editor, preview, files, and settings.',
-                            control: SegmentedButton<ThemeMode>(
-                              segments: const [
-                                ButtonSegment(value: ThemeMode.system, label: Text('Auto'), icon: Icon(Icons.monitor_outlined)),
-                                ButtonSegment(value: ThemeMode.light, label: Text('Light'), icon: Icon(Icons.light_mode_outlined)),
-                                ButtonSegment(value: ThemeMode.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode_outlined)),
-                              ],
-                              selected: {themeMode},
-                              onSelectionChanged: (value) => onThemeModeChanged(value.first),
-                            ),
-                          ),
-                          SettingSwitchRow(
-                            title: 'Workbench: AMOLED Dark',
-                            description: 'Uses true black surfaces, but only when dark mode is active.',
-                            value: amoledDark,
-                            onChanged: onAmoledChanged,
-                          ),
-                          SettingRow(
-                            title: 'Workbench: Accent Color',
-                            description: 'Choose a quick accent color for the whole app.',
-                            control: Wrap(
-                              spacing: 8,
-                              children: [
-                                for (final color in accentChoices)
-                                  InkWell(
-                                    onTap: () => onAccentChanged(color),
-                                    borderRadius: BorderRadius.circular(999),
-                                    child: CircleAvatar(
-                                      backgroundColor: color,
-                                      child: accent.toARGB32() == color.toARGB32() ? const Icon(Icons.check, color: Colors.white) : null,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SettingSwitchRow(
-                            title: 'Workbench: Accent-Tinted Background',
-                            description: 'Let the accent color softly tint the full app background in light and LCD dark modes.',
-                            value: accentTintBackground,
-                            onChanged: onAccentTintChanged,
-                          ),
-                          SettingSwitchRow(
-                            title: 'Files: Letter Icons',
-                            description: 'Show first letters inside colored folder icons. System items keep normal symbols.',
-                            value: letterIcons,
-                            onChanged: onLetterIconsChanged,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 42, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(height: 10),
+            Text(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 12),
+            FilledButton(onPressed: onPressed, child: Text(action)),
+          ],
         ),
       ),
     );
   }
 }
 
-class SettingRow extends StatelessWidget {
-  const SettingRow({
-    super.key,
-    required this.title,
-    required this.description,
-    required this.control,
-  });
+class NoteEditResult {
+  const NoteEditResult(this.title, this.folder, this.tag);
 
   final String title;
-  final String description;
-  final Widget control;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
-                const SizedBox(height: 6),
-                Text(description),
-              ],
-            ),
-          ),
-          const SizedBox(width: 22),
-          SizedBox(width: 420, child: control),
-        ],
-      ),
-    );
-  }
-}
-
-class SettingSwitchRow extends StatelessWidget {
-  const SettingSwitchRow({
-    super.key,
-    required this.title,
-    required this.description,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String title;
-  final String description;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return SettingRow(
-      title: title,
-      description: description,
-      control: Align(
-        alignment: Alignment.centerRight,
-        child: Switch(value: value, onChanged: onChanged),
-      ),
-    );
-  }
-}
-
-IconData systemIcon(String name) {
-  return switch (name) {
-    'Inbox' => Icons.inbox_outlined,
-    'Starred' => Icons.star_border,
-    'Drafts' => Icons.drive_file_rename_outline,
-    'Recent' => Icons.history,
-    'Trash' => Icons.delete_outline,
-    'Archive' => Icons.archive_outlined,
-    _ => Icons.folder_outlined,
-  };
+  final String folder;
+  final String tag;
 }
 
 class Note {
   const Note({
+    required this.id,
     required this.title,
-    required this.summary,
+    required this.folder,
     required this.tag,
-    required this.markdown,
+    required this.summary,
+    required this.body,
+    required this.updatedAt,
+    required this.wordCount,
+    required this.attachments,
+    this.starred = false,
   });
 
+  final String id;
   final String title;
-  final String summary;
+  final String folder;
   final String tag;
-  final String markdown;
+  final String summary;
+  final String body;
+  final DateTime updatedAt;
+  final int wordCount;
+  final List<AttachmentFile> attachments;
+  final bool starred;
+
+  factory Note.fromJson(Map<String, dynamic> json) {
+    final body = json['body'] as String? ?? '';
+    return Note(
+      id: json['id'] as String? ?? DateTime.now().microsecondsSinceEpoch.toString(),
+      title: json['title'] as String? ?? 'Untitled note',
+      folder: json['folder'] as String? ?? 'Inbox',
+      tag: json['tag'] as String? ?? '#draft',
+      summary: json['summary'] as String? ?? 'Saved note',
+      body: body,
+      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime.now(),
+      wordCount: json['wordCount'] as int? ?? countWords(body),
+      attachments: ((json['attachments'] as List<dynamic>?) ?? const [])
+          .map((name) => AttachmentFile.fromName(name as String))
+          .toList(),
+      starred: json['starred'] as bool? ?? false,
+    );
+  }
+
+  Note copyWith({
+    String? title,
+    String? folder,
+    String? tag,
+    String? summary,
+    String? body,
+    DateTime? updatedAt,
+    int? wordCount,
+    List<AttachmentFile>? attachments,
+    bool? starred,
+  }) {
+    return Note(
+      id: id,
+      title: title ?? this.title,
+      folder: folder ?? this.folder,
+      tag: tag ?? this.tag,
+      summary: summary ?? this.summary,
+      body: body ?? this.body,
+      updatedAt: updatedAt ?? this.updatedAt,
+      wordCount: wordCount ?? this.wordCount,
+      attachments: attachments ?? this.attachments,
+      starred: starred ?? this.starred,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'folder': folder,
+      'tag': tag,
+      'summary': summary,
+      'body': body,
+      'updatedAt': updatedAt.toIso8601String(),
+      'wordCount': wordCount,
+      'attachments': attachments.map((file) => file.name).toList(),
+      'starred': starred,
+    };
+  }
 }
 
 class AttachmentFile {
@@ -1168,46 +1565,203 @@ class AttachmentFile {
     required this.color,
   });
 
+  factory AttachmentFile.fromName(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.pdf')) {
+      return AttachmentFile(name: name, meta: 'PDF document', icon: Icons.picture_as_pdf_outlined, color: Colors.orange);
+    }
+    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) {
+      return AttachmentFile(name: name, meta: 'Image preview', icon: Icons.image_outlined, color: Colors.green);
+    }
+    if (lower.endsWith('.m4a') || lower.endsWith('.mp3') || lower.endsWith('.wav')) {
+      return AttachmentFile(name: name, meta: 'Audio note', icon: Icons.graphic_eq, color: Colors.blue);
+    }
+    return AttachmentFile(name: name, meta: 'Linked file', icon: Icons.insert_drive_file_outlined, color: Colors.purple);
+  }
+
   final String name;
   final String meta;
   final IconData icon;
   final Color color;
 }
 
-const sampleMarkdown = '''
+IconData folderIcon(String name, {bool selected = false}) {
+  return switch (name) {
+    'All' => Icons.all_inbox_outlined,
+    'Starred' => selected ? Icons.star : Icons.star_border,
+    'Inbox' => Icons.inbox_outlined,
+    'Projects' => selected ? Icons.folder : Icons.folder_outlined,
+    'Study' => Icons.school_outlined,
+    'Personal' => Icons.person_outline,
+    _ => selected ? Icons.folder : Icons.folder_outlined,
+  };
+}
+
+List<String> notesTags(List<Note> notes) {
+  final tags = notes.map((note) => note.tag).toSet().toList()..sort();
+  return tags;
+}
+
+int countWords(String text) {
+  return RegExp(r"[A-Za-z0-9_']+").allMatches(text).length;
+}
+
+String relativeDate(DateTime date) {
+  final diff = DateTime.now().difference(date);
+  if (diff.inMinutes < 1) {
+    return 'Just now';
+  }
+  if (diff.inHours < 1) {
+    return '${diff.inMinutes}m ago';
+  }
+  if (diff.inDays < 1) {
+    return '${diff.inHours}h ago';
+  }
+  if (diff.inDays == 1) {
+    return 'Yesterday';
+  }
+  return '${diff.inDays}d ago';
+}
+
+const vaultStorageKey = 'libre_notes_vault_v1';
+
+final sampleUpdatedAt = DateTime(2026, 4, 29, 19, 45);
+
+final seedNotes = [
+  Note(
+    id: 'roadmap',
+    title: 'Project Roadmap',
+    folder: 'Projects',
+    tag: '#planning',
+    summary: 'Milestones for turning Libre Notes into a polished local-first Android notes app.',
+    updatedAt: sampleUpdatedAt,
+    wordCount: countWords(roadmapMarkdown),
+    starred: true,
+    attachments: const [
+      AttachmentFile(name: 'lecture-outline.pdf', meta: 'PDF document', icon: Icons.picture_as_pdf_outlined, color: Colors.orange),
+      AttachmentFile(name: 'whiteboard-photo.jpg', meta: 'Image preview', icon: Icons.image_outlined, color: Colors.green),
+    ],
+    body: roadmapMarkdown,
+  ),
+  Note(
+    id: 'editor',
+    title: 'Editor Improvements',
+    folder: 'Projects',
+    tag: '#ideas',
+    summary: 'Android editing improvements with tabs, drawer actions, save flow, and preview parity.',
+    updatedAt: sampleUpdatedAt.subtract(const Duration(hours: 3)),
+    wordCount: countWords(editorMarkdown),
+    attachments: const [
+      AttachmentFile(name: 'meeting-audio.m4a', meta: 'Audio note', icon: Icons.graphic_eq, color: Colors.blue),
+    ],
+    body: editorMarkdown,
+  ),
+  Note(
+    id: 'privacy',
+    title: 'Privacy Principles',
+    folder: 'Personal',
+    tag: '#reference',
+    summary: 'Local-first promises and product boundaries for a privacy-respecting notes app.',
+    updatedAt: sampleUpdatedAt.subtract(const Duration(days: 1)),
+    wordCount: countWords(privacyMarkdown),
+    starred: true,
+    attachments: const [],
+    body: privacyMarkdown,
+  ),
+  Note(
+    id: 'meeting',
+    title: 'Meeting Notes - 2026-04-25',
+    folder: 'Study',
+    tag: '#meeting',
+    summary: 'MVP decisions, Android responsive layout notes, and next implementation steps.',
+    updatedAt: sampleUpdatedAt.subtract(const Duration(days: 3)),
+    wordCount: countWords(meetingMarkdown),
+    attachments: const [],
+    body: meetingMarkdown,
+  ),
+];
+
+const roadmapMarkdown = '''
 # Project Roadmap
 
-## Overview
-This roadmap outlines the key milestones for Libre Notes.
+Libre Notes is a local-first Markdown notebook for quick capture, clean reading, and organized project work.
 
 ## Goals
-- Build a privacy-first notes app
-- Support **Markdown** natively
-- Deliver on Windows and Android
 
-## Phases
-| Phase | Focus | Timeline |
+- Make editing comfortable on small Android phones
+- Keep preview one tap away, like SimpleMarkdown
+- Support side-by-side editing on tablets and desktop
+- Make folders, search, note actions, and attachments functional
+
+## MVP checklist
+
+- [x] Responsive Android layout
+- [x] Live Markdown preview
+- [x] Note creation and editing
+- [x] Folder filtering and starred notes
+- [x] Attachment management
+- [ ] Real file-system persistence
+
+## Release focus
+
+| Area | Status | Notes |
 | --- | --- | --- |
-| 1 | Core editor | Q2 |
-| 2 | Platform apps | Q3 |
+| Android | Active | Primary build target |
+| Web | Later | Keep code portable |
+| Windows | Later | Restore after Android stabilizes |
 
-## Next Steps
-- Finalize MVP scope
-- Validate key workflows
+> Keep the first release small, fast, and honest.
 ''';
 
-final sampleNotes = [
-  const Note(title: 'Project Roadmap', summary: 'This roadmap outlines the key milestones for Libre Notes over...', tag: '#planning', markdown: sampleMarkdown),
-  const Note(title: 'Editor Improvements', summary: 'Ideas to improve the editing experience and productivity.', tag: '#ideas', markdown: '# Editor Improvements\n\nIdeas to improve the editing experience and productivity.'),
-  const Note(title: 'Privacy Principles', summary: 'Guiding principles for privacy and data protection.', tag: '#reference', markdown: '# Privacy Principles\n\nGuiding principles for privacy and data protection.'),
-  const Note(title: 'Meeting Notes - 2026-04-25', summary: 'Discussed MVP direction and mobile preview polish.', tag: '#planning', markdown: '# Meeting Notes - 2026-04-25\n\nDiscussed MVP direction and mobile preview polish.'),
-];
+const editorMarkdown = '''
+# Editor Improvements
 
-final attachments = [
-  const AttachmentFile(name: 'lecture-outline.pdf', meta: 'PDF · 2.4 MB · cached', icon: Icons.picture_as_pdf_outlined, color: Colors.orange),
-  const AttachmentFile(name: 'whiteboard-photo.jpg', meta: 'Image · preview ready', icon: Icons.image_outlined, color: Colors.green),
-  const AttachmentFile(name: 'meeting-audio.m4a', meta: 'Audio · linked to note', icon: Icons.graphic_eq, color: Colors.blue),
-];
+The editor should feel like a real writing surface, not a resized desktop app.
+
+## Android behavior
+
+1. Notes list is its own screen on phones.
+2. Editing and preview use tabs or bottom navigation.
+3. Tablets can keep the note list visible while editing.
+4. Wide displays get a split editor and preview.
+
+```md
+Use Markdown every day.
+Keep the preview live.
+Avoid overflowing controls.
+```
+''';
+
+const privacyMarkdown = '''
+# Privacy Principles
+
+Libre Notes should be useful without requiring an account or network connection.
+
+- Local notes stay local by default
+- Attachments belong to the vault
+- Sync should be optional and transparent
+- Export should use plain Markdown whenever possible
+
+## Product promise
+
+The app should never make users wonder where their writing went.
+''';
+
+const meetingMarkdown = '''
+# Meeting Notes - 2026-04-25
+
+## Decisions
+
+- Android build is the first CI priority.
+- The desktop layout must collapse before it becomes cramped.
+- Preview needs a maintained Markdown renderer, not a hand-rolled parser.
+
+## Follow-ups
+
+- Add persistent storage
+- Add import and export
+- Add tests after the Android UI stabilizes
+''';
 
 final accentChoices = [
   const Color(0xFF2E8F83),
