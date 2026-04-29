@@ -30,6 +30,11 @@ jobs:
       - name: Set Android minimum SDK
         run: perl -0pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 24/' android/app/build.gradle.kts
 
+      - name: Use stable debug signing key
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Get dependencies
         run: flutter pub get
 

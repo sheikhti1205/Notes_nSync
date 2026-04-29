@@ -1,7 +1,7 @@
 name: libre_notes
 description: Local-first Markdown notes app prototype.
 publish_to: "none"
-version: 0.1.0+1
+version: 0.1.1+2
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -9,7 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  file_picker: ^11.0.2
   flutter_markdown_plus: ^1.0.7
+  share_plus: ^13.0.0
   shared_preferences: ^2.5.5
 
 dev_dependencies:
