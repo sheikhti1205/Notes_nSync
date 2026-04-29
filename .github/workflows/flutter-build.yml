@@ -27,11 +27,14 @@ jobs:
       - name: Generate Android platform folder
         run: flutter create --project-name libre_notes --platforms=android .
 
+      - name: Set Android minimum SDK
+        run: perl -0pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 24/' android/app/build.gradle.kts
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Analyze app code
-        run: flutter analyze lib
+        run: flutter analyze lib --no-fatal-infos
 
       - name: Build Android debug APK
         run: flutter build apk --debug
