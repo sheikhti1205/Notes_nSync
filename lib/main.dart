@@ -35,11 +35,6 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
   void initState() {
     super.initState();
     _loadAppSettings();
-    Timer(const Duration(milliseconds: 950), () {
-      if (mounted) {
-        setState(() => loading = false);
-      }
-    });
   }
 
   @override
@@ -112,7 +107,7 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Libre Notes',
+      title: 'Libre Vault',
       themeMode: themeMode,
       theme: ThemeData(
         useMaterial3: true,
@@ -128,7 +123,15 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
       home: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
         child: loading
-            ? SplashScreen(accent: accent, key: const ValueKey('splash'))
+            ? SplashScreen(
+                accent: accent,
+                key: const ValueKey('splash'),
+                onFinished: () {
+                  if (mounted) {
+                    setState(() => loading = false);
+                  }
+                },
+              )
             : LibreNotesHome(
                 key: const ValueKey('home'),
                 accent: accent,
@@ -152,9 +155,10 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
 }
 
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key, required this.accent});
+  const SplashScreen({super.key, required this.accent, required this.onFinished});
 
   final Color accent;
+  final VoidCallback onFinished;
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -166,7 +170,17 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
+    controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1150));
+    controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        Future<void>.delayed(const Duration(milliseconds: 160), () {
+          if (mounted) {
+            widget.onFinished();
+          }
+        });
+      }
+    });
+    controller.forward();
   }
 
   @override
@@ -184,10 +198,16 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         child: AnimatedBuilder(
           animation: controller,
           builder: (context, child) {
-            final value = Curves.easeInOut.transform(controller.value);
-            return Transform.scale(
-              scale: 0.94 + value * 0.08,
-              child: Opacity(opacity: 0.78 + value * 0.22, child: child),
+            final value = Curves.easeOutCubic.transform(controller.value);
+            return Opacity(
+              opacity: value.clamp(0.0, 1.0),
+              child: Transform.translate(
+                offset: Offset(0, 18 * (1 - value)),
+                child: Transform.scale(
+                  scale: 0.9 + value * 0.1,
+                  child: child,
+                ),
+              ),
             );
           },
           child: Column(
@@ -195,7 +215,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             children: [
               LibreLogo(accent: widget.accent, size: 84),
               const SizedBox(height: 18),
-              const Text('Libre Notes', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+              const Text('Libre Vault', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
               const SizedBox(height: 22),
               SizedBox(
                 width: 180,
@@ -237,16 +257,16 @@ class LibreLogo extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Icon(Icons.edit_note_rounded, color: Colors.white, size: size * 0.62),
+          Icon(Icons.shield_outlined, color: Colors.white, size: size * 0.58),
           Positioned(
-            right: size * 0.18,
-            bottom: size * 0.16,
+            right: size * 0.2,
+            bottom: size * 0.18,
             child: Container(
-              width: size * 0.22,
-              height: size * 0.22,
+              width: size * 0.2,
+              height: size * 0.2,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(size * 0.06),
+                shape: BoxShape.circle,
               ),
             ),
           ),
@@ -476,29 +496,37 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         final compact = width < 700;
         final medium = width >= 700 && width < 1050;
 
-        return Scaffold(
-          key: scaffoldKey,
-          drawer: compact ? _AppDrawer(home: this) : null,
-          appBar: compact ? _buildCompactAppBar() : null,
-          bottomNavigationBar: compact ? _buildBottomNavigation() : null,
-          floatingActionButton: compact && compactPage == 0
-              ? FloatingActionButton.extended(
-                  onPressed: _createNote,
-                  icon: const Icon(Icons.note_add_outlined),
-                  label: const Text('New'),
-                )
-              : null,
-          body: Container(
-            decoration: BoxDecoration(
-              color: widget.pureBlack && dark ? Colors.black : scheme.surface,
-              boxShadow: tint == null ? null : [tint],
-            ),
-            child: SafeArea(
-              child: compact
-                  ? _CompactHome(home: this)
-                  : medium
-                      ? _MediumHome(home: this)
-                      : _ExpandedHome(home: this),
+        return PopScope(
+          canPop: !compact || compactPage == 0,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && compact && compactPage != 0) {
+              _setCompactPage(0);
+            }
+          },
+          child: Scaffold(
+            key: scaffoldKey,
+            drawer: compact ? _AppDrawer(home: this) : null,
+            appBar: compact ? _buildCompactAppBar() : null,
+            bottomNavigationBar: compact ? _buildBottomNavigation() : null,
+            floatingActionButton: compact && compactPage == 0
+                ? FloatingActionButton.extended(
+                    onPressed: _createNote,
+                    icon: const Icon(Icons.note_add_outlined),
+                    label: const Text('New'),
+                  )
+                : null,
+            body: Container(
+              decoration: BoxDecoration(
+                color: widget.pureBlack && dark ? Colors.black : scheme.surface,
+                boxShadow: tint == null ? null : [tint],
+              ),
+              child: SafeArea(
+                child: compact
+                    ? _CompactHome(home: this)
+                    : medium
+                        ? _MediumHome(home: this)
+                        : _ExpandedHome(home: this),
+              ),
             ),
           ),
         );
@@ -970,7 +998,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _addAttachment() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       withData: false,
       type: FileType.any,
@@ -1038,7 +1066,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _insertImage() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       allowMultiple: false,
       withData: false,
       type: FileType.image,
@@ -1127,7 +1155,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   Future<void> _exportBackup() async {
     final bytes = Uint8List.fromList(utf8.encode(_encodedVault()));
     final fileName = 'libre-notes-backup-${DateTime.now().millisecondsSinceEpoch}.json';
-    final path = await FilePicker.saveFile(
+    final path = await FilePicker.platform.saveFile(
       dialogTitle: 'Save Libre Notes backup',
       fileName: fileName,
       bytes: bytes,
@@ -1140,7 +1168,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _importBackup() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       dialogTitle: 'Restore Libre Notes backup',
       type: FileType.custom,
       allowedExtensions: ['json'],
@@ -1388,11 +1416,11 @@ class _AppDrawer extends StatelessWidget {
               CircleAvatar(
                 backgroundColor: home.accent,
                 foregroundColor: Colors.white,
-                child: const Text('L', style: TextStyle(fontWeight: FontWeight.w900)),
+                child: const Icon(Icons.shield_outlined),
               ),
               const SizedBox(width: 12),
               const Expanded(
-                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                child: Text('Libre Vault', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -1483,11 +1511,11 @@ class _FolderRail extends StatelessWidget {
               CircleAvatar(
                 backgroundColor: home.accent,
                 foregroundColor: Colors.white,
-                child: const Text('L', style: TextStyle(fontWeight: FontWeight.w900)),
+                child: const Icon(Icons.shield_outlined),
               ),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                child: Text('Libre Vault', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               ),
             ],
           ),
