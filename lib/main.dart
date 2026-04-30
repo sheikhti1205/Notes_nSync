@@ -3,12 +3,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 void main() {
   runApp(const LibreNotesApp());
@@ -327,7 +333,14 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   List<Note> notes = [...seedNotes];
   List<String> customFolders = [...seedFolders];
   Map<String, int> tagColorIndexes = {};
+  Map<String, String> folderIconKeys = {...seedFolderIcons};
   Map<String, double> attachmentPositions = {};
+  String userName = 'Local writer';
+  String userHandle = 'offline-vault';
+  String? vaultFolderPath;
+  bool vaultEncrypted = false;
+  String? vaultPassword;
+  bool vaultSetupPromptShown = false;
   String? backgroundVisualPath;
   String selectedNoteId = seedNotes.first.id;
   String selectedFolder = 'All';
@@ -416,12 +429,24 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   Future<void> _loadVault() async {
     final raw = await prefs.getString(vaultStorageKey);
     if (!mounted || raw == null || raw.isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptVaultSetup());
       return;
     }
     try {
-      final decoded = jsonDecode(raw);
+      dynamic decoded = jsonDecode(raw);
       final List<dynamic> noteItems;
       final List<String> folderItems;
+      if (decoded is Map<String, dynamic>) {
+        final settings = (decoded['settings'] as Map<String, dynamic>?) ?? const {};
+        userName = (settings['userName'] as String?) ?? userName;
+        userHandle = (settings['userHandle'] as String?) ?? userHandle;
+        vaultFolderPath = settings['vaultFolderPath'] as String? ?? vaultFolderPath;
+        vaultEncrypted = settings['vaultEncrypted'] as bool? ?? vaultEncrypted;
+        final externalVault = await _readExternalVaultIfAvailable();
+        if (externalVault != null) {
+          decoded = jsonDecode(externalVault);
+        }
+      }
       if (decoded is Map<String, dynamic>) {
         final settings = (decoded['settings'] as Map<String, dynamic>?) ?? const {};
         noteItems = (decoded['notes'] as List<dynamic>?) ?? const [];
@@ -429,6 +454,10 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
             .map((folder) => folder.toString())
             .where((folder) => folder.trim().isNotEmpty)
             .toList();
+        userName = (settings['userName'] as String?) ?? userName;
+        userHandle = (settings['userHandle'] as String?) ?? userHandle;
+        vaultFolderPath = settings['vaultFolderPath'] as String? ?? vaultFolderPath;
+        vaultEncrypted = settings['vaultEncrypted'] as bool? ?? vaultEncrypted;
         trashRetentionDays = _readInt(decoded['trashRetentionDays'] ?? settings['trashRetentionDays'], fallback: trashRetentionDays);
         sortMode = (settings['sortMode'] as String?) ?? sortMode;
         preferredExportType = (settings['preferredExportType'] as String?) ?? preferredExportType;
@@ -437,7 +466,12 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         reduceMotion = settings['reduceMotion'] as bool? ?? reduceMotion;
         backgroundVisualPath = settings['backgroundVisualPath'] as String? ?? backgroundVisualPath;
         final rawTagColors = Map<String, dynamic>.from((decoded['tagColors'] as Map?) ?? (settings['tagColors'] as Map?) ?? const {});
-        tagColorIndexes = rawTagColors.map((key, value) => MapEntry(key, value is int ? value : int.tryParse(value.toString()) ?? 0));
+        tagColorIndexes = rawTagColors.map((key, value) {
+          final parsed = value is int ? value : int.tryParse(value.toString()) ?? 0;
+          return MapEntry(key, parsed < systemColors.length ? systemColors[parsed].toARGB32() : parsed);
+        });
+        final rawFolderIcons = Map<String, dynamic>.from((settings['folderIcons'] as Map?) ?? (decoded['folderIcons'] as Map?) ?? const {});
+        folderIconKeys = {...seedFolderIcons, ...rawFolderIcons.map((key, value) => MapEntry(key, value.toString()))};
         final rawPositions = Map<String, dynamic>.from(settings['attachmentPositions'] as Map? ?? const {});
         attachmentPositions = rawPositions.map((key, value) => MapEntry(key, value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0));
       } else {
@@ -458,15 +492,19 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         syncingEditor = false;
       });
       _queuePersist();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptVaultSetup());
     } catch (_) {
       _showSnack('Saved vault data could not be loaded. Seed notes are still available.');
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptVaultSetup());
     }
   }
 
   void _queuePersist() {
     saveDebounce?.cancel();
     saveDebounce = Timer(const Duration(milliseconds: 450), () async {
-      await prefs.setString(vaultStorageKey, _encodedVault());
+      final encoded = _encodedVault();
+      await _writeExternalVault(encoded);
+      await prefs.setString(vaultStorageKey, vaultEncrypted && vaultFolderPath != null ? _encodedVaultPointer() : encoded);
     });
   }
 
@@ -475,9 +513,15 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
       'version': 1,
       'exportedAt': DateTime.now().toIso8601String(),
       'folders': customFolders,
+      'folderIcons': folderIconKeys,
       'trashRetentionDays': trashRetentionDays,
       'tagColors': tagColorIndexes,
       'settings': {
+        'userName': userName,
+        'userHandle': userHandle,
+        'vaultFolderPath': vaultFolderPath,
+        'vaultEncrypted': vaultEncrypted,
+        'folderIcons': folderIconKeys,
         'trashRetentionDays': trashRetentionDays,
         'sortMode': sortMode,
         'preferredExportType': preferredExportType,
@@ -496,6 +540,175 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
       },
       'notes': notes.map((note) => note.toJson()).toList(),
     });
+  }
+
+  String _encodedVaultPointer() {
+    return const JsonEncoder.withIndent('  ').convert({
+      'version': 1,
+      'folders': customFolders,
+      'settings': {
+        'userName': userName,
+        'userHandle': userHandle,
+        'vaultFolderPath': vaultFolderPath,
+        'vaultEncrypted': vaultEncrypted,
+        'folderIcons': folderIconKeys,
+        'themeMode': themeMode.name,
+        'amoledDark': amoledDark,
+        'pureBlack': pureBlack,
+        'accentTintBackground': accentTintBackground,
+        'letterIcons': letterIcons,
+        'denseNotes': denseNotes,
+        'accent': accent.toARGB32(),
+      },
+      'notes': const [],
+    });
+  }
+
+  String get _vaultFilePath {
+    final root = vaultFolderPath;
+    if (root == null || root.isEmpty) {
+      return '';
+    }
+    return '${root.replaceAll(RegExp(r'[\\/]+$'), '')}/libre_vault.${vaultEncrypted ? 'vault' : 'json'}';
+  }
+
+  Future<String?> _readExternalVaultIfAvailable() async {
+    final path = _vaultFilePath;
+    if (path.isEmpty || !File(path).existsSync()) {
+      return null;
+    }
+    final raw = await File(path).readAsString();
+    if (!vaultEncrypted) {
+      return raw;
+    }
+    var password = vaultPassword;
+    if (password == null || password.isEmpty) {
+      password = await _promptVaultPassword(title: 'Unlock vault', action: 'Unlock');
+    }
+    if (password == null || password.isEmpty) {
+      return null;
+    }
+    try {
+      vaultPassword = password;
+      return await _decryptVaultText(raw, password);
+    } catch (_) {
+      _showSnack('Vault password did not unlock that file.');
+      return null;
+    }
+  }
+
+  Future<void> _writeExternalVault(String encoded) async {
+    final path = _vaultFilePath;
+    if (path.isEmpty) {
+      return;
+    }
+    try {
+      final file = File(path);
+      await file.parent.create(recursive: true);
+      final payload = vaultEncrypted && vaultPassword != null && vaultPassword!.isNotEmpty
+          ? await _encryptVaultText(encoded, vaultPassword!)
+          : encoded;
+      await file.writeAsString(payload);
+    } catch (_) {
+      _showSnack('Could not write the external vault file.');
+    }
+  }
+
+  Future<String> _encryptVaultText(String plainText, String password) async {
+    final algorithm = AesGcm.with256bits();
+    final salt = algorithm.newNonce();
+    final nonce = algorithm.newNonce();
+    final key = await Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 120000,
+      bits: 256,
+    ).deriveKey(secretKey: SecretKey(utf8.encode(password)), nonce: salt);
+    final box = await algorithm.encrypt(utf8.encode(plainText), secretKey: key, nonce: nonce);
+    return jsonEncode({
+      'format': 'libre-vault-aes-gcm-v1',
+      'salt': base64Encode(salt),
+      'nonce': base64Encode(box.nonce),
+      'mac': base64Encode(box.mac.bytes),
+      'cipherText': base64Encode(box.cipherText),
+    });
+  }
+
+  Future<String> _decryptVaultText(String payload, String password) async {
+    final decoded = jsonDecode(payload) as Map<String, dynamic>;
+    final algorithm = AesGcm.with256bits();
+    final salt = base64Decode(decoded['salt'] as String);
+    final key = await Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 120000,
+      bits: 256,
+    ).deriveKey(secretKey: SecretKey(utf8.encode(password)), nonce: salt);
+    final clear = await algorithm.decrypt(
+      SecretBox(
+        base64Decode(decoded['cipherText'] as String),
+        nonce: base64Decode(decoded['nonce'] as String),
+        mac: Mac(base64Decode(decoded['mac'] as String)),
+      ),
+      secretKey: key,
+    );
+    return utf8.decode(clear);
+  }
+
+  Future<void> _maybePromptVaultSetup() async {
+    if (!mounted || vaultSetupPromptShown || vaultFolderPath != null) {
+      return;
+    }
+    vaultSetupPromptShown = true;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Choose vault storage'),
+        content: const Text('Use the built-in app vault, or pick a folder so your notes live somewhere you control.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, 'builtin'), child: const Text('Built-in')),
+          OutlinedButton(onPressed: () => Navigator.pop(context, 'folder'), child: const Text('Choose folder')),
+          FilledButton(onPressed: () => Navigator.pop(context, 'encrypted'), child: const Text('Encrypted folder')),
+        ],
+      ),
+    );
+    if (choice == null || choice == 'builtin') {
+      _queuePersist();
+      return;
+    }
+    await _chooseVaultFolder(encrypt: choice == 'encrypted');
+  }
+
+  Future<void> _chooseVaultFolder({bool encrypt = false}) async {
+    final path = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose Libre Vault folder');
+    if (path == null || path.isEmpty) {
+      return;
+    }
+    var password = vaultPassword;
+    if (encrypt) {
+      password = await _promptVaultPassword(title: 'Create vault password', action: 'Use password');
+      if (password == null || password.isEmpty) {
+        _showSnack('Vault folder was not encrypted because no password was set.');
+        return;
+      }
+    }
+    setState(() {
+      vaultFolderPath = path;
+      vaultEncrypted = encrypt;
+      vaultPassword = password;
+    });
+    _queuePersist();
+    _showSnack(encrypt ? 'Encrypted vault folder selected.' : 'Vault folder selected.');
+  }
+
+  Future<String?> _promptVaultPassword({required String title, required String action}) {
+    return showDialog<String>(
+      context: context,
+      builder: (context) => TextInputDialog(
+        title: title,
+        label: 'Password',
+        primaryAction: action,
+        obscureText: true,
+      ),
+    );
   }
 
   @override
@@ -616,6 +829,9 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
               case 'restoreBackup':
                 _importBackup();
                 break;
+              case 'importMarkdown':
+                _importMarkdownFiles();
+                break;
             }
           },
           itemBuilder: (context) => [
@@ -630,6 +846,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
             const PopupMenuDivider(),
             const PopupMenuItem(value: 'backup', child: Text('Backup vault')),
             const PopupMenuItem(value: 'restoreBackup', child: Text('Restore backup')),
+            const PopupMenuItem(value: 'importMarkdown', child: Text('Import Markdown')),
             const PopupMenuDivider(),
             const PopupMenuItem(value: 'settings', child: Text('Settings')),
           ],
@@ -1006,15 +1223,12 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _createFolder() async {
-    final folder = await showDialog<String>(
+    final result = await showDialog<FolderEditResult>(
       context: context,
-      builder: (context) => const TextInputDialog(
-        title: 'New folder',
-        label: 'Folder name',
-        primaryAction: 'Create',
-      ),
+      builder: (context) => const FolderDialog(),
     );
-    if (folder == null || folder.isEmpty) {
+    final folder = result?.name.trim() ?? '';
+    if (folder.isEmpty) {
       return;
     }
     if (folders.any((existing) => existing.toLowerCase() == folder.toLowerCase())) {
@@ -1024,6 +1238,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     }
     setState(() {
       customFolders = [...customFolders, folder]..sort();
+      folderIconKeys = {...folderIconKeys, folder: result!.iconKey};
       selectedFolder = folder;
       compactPage = 0;
     });
@@ -1220,24 +1435,38 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Color colorForTag(String tag) {
-    final index = tagColorIndexes[tag] ?? tag.hashCode.abs() % systemColors.length;
-    return systemColors[index % systemColors.length];
+    return Color(tagColorIndexes[tag] ?? systemColors[tag.hashCode.abs() % systemColors.length].toARGB32());
+  }
+
+  String folderIconKey(String folder) {
+    return folderIconKeys[folder] ?? seedFolderIcons[folder] ?? 'folder';
   }
 
   Future<void> _chooseTagColor(String tag) async {
-    final selected = await showModalBottomSheet<int>(
+    final selected = await showModalBottomSheet<Color>(
       context: context,
       showDragHandle: true,
       builder: (context) => ColorPickerSheet(
         title: tag,
-        selectedIndex: tagColorIndexes[tag] ?? tag.hashCode.abs() % systemColors.length,
+        initialColor: colorForTag(tag),
       ),
     );
     if (selected == null) {
       return;
     }
-    setState(() => tagColorIndexes = {...tagColorIndexes, tag: selected});
+    setState(() => tagColorIndexes = {...tagColorIndexes, tag: selected.toARGB32()});
     _queuePersist();
+  }
+
+  Future<void> _chooseAccentColor() async {
+    final selected = await showModalBottomSheet<Color>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => ColorPickerSheet(title: 'Accent color', initialColor: accent),
+    );
+    if (selected != null) {
+      onAccentChanged(selected);
+    }
   }
 
   void _saveNote() {
@@ -1261,8 +1490,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
 
   Future<void> _exportSelectedNote([String? type]) async {
     final exportType = type ?? preferredExportType;
-    final payload = _noteExportPayload(selectedNote, exportType);
-    final bytes = Uint8List.fromList(utf8.encode(payload));
+    final bytes = await _noteExportBytes(selectedNote, exportType);
     final path = await FilePicker.platform.saveFile(
       dialogTitle: 'Export ${selectedNote.title}',
       fileName: '${safeFileName(selectedNote.title)}.$exportType',
@@ -1277,10 +1505,19 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
 
   Future<void> _shareSelectedNoteAs([String? type]) async {
     final exportType = type ?? preferredExportType;
+    if (exportType == 'pdf') {
+      await Printing.sharePdf(
+        bytes: await _buildNotePdfBytes(selectedNote),
+        filename: '${safeFileName(selectedNote.title)}.pdf',
+      );
+      return;
+    }
+    final fileName = '${safeFileName(selectedNote.title)}.$exportType';
+    final bytes = await _noteExportBytes(selectedNote, exportType);
     await SharePlus.instance.share(ShareParams(
       title: selectedNote.title,
-      subject: '${selectedNote.title} .$exportType',
-      text: _noteExportPayload(selectedNote, exportType),
+      subject: fileName,
+      files: [XFile.fromData(bytes, name: fileName, mimeType: _exportMimeType(exportType))],
     ));
   }
 
@@ -1289,7 +1526,65 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
       'txt' => note.body,
       'json' => const JsonEncoder.withIndent('  ').convert(note.toJson()),
       'html' => '<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape.convert(note.title)}</title></head><body><pre>${htmlEscape.convert(note.body)}</pre></body></html>',
+      'doc' => '<html><head><meta charset="utf-8"><title>${htmlEscape.convert(note.title)}</title></head><body><h1>${htmlEscape.convert(note.title)}</h1><pre>${htmlEscape.convert(note.body)}</pre></body></html>',
       _ => note.body,
+    };
+  }
+
+  Future<Uint8List> _noteExportBytes(Note note, String type) async {
+    if (type == 'pdf') {
+      return _buildNotePdfBytes(note);
+    }
+    return Uint8List.fromList(utf8.encode(_noteExportPayload(note, type)));
+  }
+
+  Future<Uint8List> _buildNotePdfBytes(Note note) async {
+    final doc = pw.Document();
+    final lines = note.body.split('\n');
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(36),
+        build: (context) => [
+          pw.Text(note.title, style: pw.TextStyle(fontSize: 26, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Text('${note.folder}  •  ${note.tag}  •  ${relativeDate(note.updatedAt)}', style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+          pw.Divider(),
+          ...lines.map((line) {
+            final trimmed = line.trimRight();
+            if (trimmed.startsWith('# ')) {
+              return pw.Padding(
+                padding: const pw.EdgeInsets.only(top: 14, bottom: 6),
+                child: pw.Text(trimmed.substring(2), style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+              );
+            }
+            if (trimmed.startsWith('## ')) {
+              return pw.Padding(
+                padding: const pw.EdgeInsets.only(top: 12, bottom: 4),
+                child: pw.Text(trimmed.substring(3), style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+              );
+            }
+            if (trimmed.isEmpty) {
+              return pw.SizedBox(height: 8);
+            }
+            return pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 4),
+              child: pw.Text(trimmed.replaceAll(RegExp(r'[*_`#>-]'), ''), style: const pw.TextStyle(fontSize: 11)),
+            );
+          }),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  String _exportMimeType(String type) {
+    return switch (type) {
+      'txt' => 'text/plain',
+      'html' => 'text/html',
+      'doc' => 'application/msword',
+      'json' => 'application/json',
+      _ => 'text/markdown',
     };
   }
 
@@ -1310,6 +1605,24 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
 
   void _setReduceMotion(bool value) {
     setState(() => reduceMotion = value);
+    _queuePersist();
+  }
+
+  void _setUserProfile(String name, String handle) {
+    setState(() {
+      userName = name.trim().isEmpty ? 'Local writer' : name.trim();
+      userHandle = handle.trim().isEmpty ? 'offline-vault' : handle.trim();
+    });
+    _queuePersist();
+  }
+
+  void _setVaultEncryption({required bool enabled, String? password}) {
+    setState(() {
+      vaultEncrypted = enabled;
+      if (password != null && password.isNotEmpty) {
+        vaultPassword = password;
+      }
+    });
     _queuePersist();
   }
 
@@ -1383,7 +1696,12 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
           .toList()
         ..sort();
       final restoredTagColors = Map<String, dynamic>.from((decoded['tagColors'] as Map?) ?? (settings['tagColors'] as Map?) ?? const {})
-          .map((key, value) => MapEntry(key, value is int ? value : int.tryParse(value.toString()) ?? 0));
+          .map((key, value) {
+        final parsed = value is int ? value : int.tryParse(value.toString()) ?? 0;
+        return MapEntry(key, parsed < systemColors.length ? systemColors[parsed].toARGB32() : parsed);
+      });
+      final restoredFolderIcons = Map<String, dynamic>.from((settings['folderIcons'] as Map?) ?? (decoded['folderIcons'] as Map?) ?? const {})
+          .map((key, value) => MapEntry(key, value.toString()));
       if (restoredNotes.isEmpty) {
         _showSnack('Backup did not contain any notes.');
         return;
@@ -1394,6 +1712,10 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
       highContrastText = settings['highContrastText'] as bool? ?? highContrastText;
       reduceMotion = settings['reduceMotion'] as bool? ?? reduceMotion;
       backgroundVisualPath = settings['backgroundVisualPath'] as String? ?? backgroundVisualPath;
+      userName = (settings['userName'] as String?) ?? userName;
+      userHandle = (settings['userHandle'] as String?) ?? userHandle;
+      vaultFolderPath = settings['vaultFolderPath'] as String? ?? vaultFolderPath;
+      vaultEncrypted = settings['vaultEncrypted'] as bool? ?? vaultEncrypted;
       final rawPositions = Map<String, dynamic>.from(settings['attachmentPositions'] as Map? ?? const {});
       attachmentPositions = rawPositions.map((key, value) => MapEntry(key, value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0));
       final cleanedNotes = _dropExpiredTrash(restoredNotes);
@@ -1402,6 +1724,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         notes = cleanedNotes.isEmpty ? [_newBlankNote()] : cleanedNotes;
         customFolders = restoredFolders.isEmpty ? [...seedFolders] : restoredFolders;
         tagColorIndexes = restoredTagColors;
+        folderIconKeys = {...seedFolderIcons, ...restoredFolderIcons};
         selectedFolder = 'All';
         selectedNoteId = notes.firstWhere((note) => note.isActive, orElse: () => notes.first).id;
         syncingEditor = true;
@@ -1414,6 +1737,58 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     } catch (_) {
       _showSnack('That backup file is not valid.');
     }
+  }
+
+  Future<void> _importMarkdownFiles() async {
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Import Markdown notes',
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: ['md', 'markdown', 'txt'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+    final imported = <Note>[];
+    for (final file in result.files) {
+      final bytes = file.bytes ?? (file.path == null ? null : await File(file.path!).readAsBytes());
+      if (bytes == null) {
+        continue;
+      }
+      final body = utf8.decode(bytes, allowMalformed: true);
+      final title = markdownTitle(body).trim().isEmpty ? baseNameWithoutExtension(file.name) : markdownTitle(body);
+      final now = DateTime.now();
+      imported.add(Note(
+        id: '${now.microsecondsSinceEpoch}-${imported.length}',
+        title: title,
+        folder: selectedFolder == 'All' || selectedFolder == 'Starred' || selectedFolder == 'Archive' || selectedFolder == 'Trash' ? 'Inbox' : selectedFolder,
+        tag: '#imported',
+        summary: body.split('\n').firstWhere((line) => line.trim().isNotEmpty, orElse: () => 'Imported Markdown note'),
+        body: body,
+        updatedAt: now,
+        wordCount: countWords(body),
+        attachments: const [],
+      ));
+    }
+    if (imported.isEmpty) {
+      _showSnack('No Markdown files could be imported.');
+      return;
+    }
+    setState(() {
+      notes = [...imported, ...notes];
+      selectedNoteId = imported.first.id;
+      selectedFolder = imported.first.folder;
+      if (!customFolders.any((folder) => folder.toLowerCase() == selectedFolder.toLowerCase())) {
+        customFolders = [...customFolders, selectedFolder]..sort();
+      }
+      syncingEditor = true;
+      editor.text = imported.first.body;
+      syncingEditor = false;
+      compactPage = 1;
+    });
+    _queuePersist();
+    _showSnack(imported.length == 1 ? 'Markdown note imported.' : '${imported.length} Markdown notes imported.');
   }
 
   void _applyBackupSettings(Map<String, dynamic> settings) {
@@ -1622,8 +1997,8 @@ class _AppDrawer extends StatelessWidget {
         ),
         for (final folder in home.folders)
           NavigationDrawerDestination(
-            icon: Icon(folderIcon(folder)),
-            selectedIcon: Icon(folderIcon(folder, selected: true)),
+            icon: Icon(folderIcon(home.folderIconKey(folder))),
+            selectedIcon: Icon(folderIcon(home.folderIconKey(folder), selected: true)),
             label: Text(folder),
           ),
         const Divider(),
@@ -1633,6 +2008,14 @@ class _AppDrawer extends StatelessWidget {
           onTap: () {
             Navigator.pop(context);
             home._createFolder();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.upload_file_outlined),
+          title: const Text('Import Markdown'),
+          onTap: () {
+            Navigator.pop(context);
+            home._importMarkdownFiles();
           },
         ),
         ListTile(
@@ -1686,8 +2069,8 @@ class _FolderRail extends StatelessWidget {
         destinations: [
           for (final folder in home.folders)
             NavigationRailDestination(
-              icon: Icon(folderIcon(folder)),
-              selectedIcon: Icon(folderIcon(folder, selected: true)),
+              icon: Icon(folderIcon(home.folderIconKey(folder))),
+              selectedIcon: Icon(folderIcon(home.folderIconKey(folder), selected: true)),
               label: Text(folder),
             ),
         ],
@@ -1725,6 +2108,11 @@ class _FolderRail extends StatelessWidget {
             icon: const Icon(Icons.create_new_folder_outlined),
             label: const Text('New folder'),
           ),
+          OutlinedButton.icon(
+            onPressed: home._importMarkdownFiles,
+            icon: const Icon(Icons.upload_file_outlined),
+            label: const Text('Import MD'),
+          ),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -1753,6 +2141,7 @@ class _FolderRail extends StatelessWidget {
               name: folder,
               selected: folder == home.selectedFolder,
               letterIcons: home.letterIcons,
+              iconKey: home.folderIconKey(folder),
               onTap: () => home._selectFolder(folder),
             ),
           const SizedBox(height: 18),
@@ -1783,12 +2172,14 @@ class FolderTile extends StatelessWidget {
     required this.name,
     required this.selected,
     required this.letterIcons,
+    required this.iconKey,
     required this.onTap,
   });
 
   final String name;
   final bool selected;
   final bool letterIcons;
+  final String iconKey;
   final VoidCallback onTap;
 
   @override
@@ -1802,7 +2193,7 @@ class FolderTile extends StatelessWidget {
               radius: 14,
               child: Text(name.substring(0, 1), style: const TextStyle(fontWeight: FontWeight.w900)),
             )
-          : Icon(folderIcon(name, selected: selected)),
+          : Icon(folderIcon(iconKey, selected: selected)),
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
       onTap: onTap,
     );
@@ -2277,6 +2668,8 @@ class PreviewPane extends StatelessWidget {
                     PopupMenuItem(value: 'md', child: Text('Markdown')),
                     PopupMenuItem(value: 'txt', child: Text('Plain text')),
                     PopupMenuItem(value: 'html', child: Text('HTML')),
+                    PopupMenuItem(value: 'pdf', child: Text('PDF')),
+                    PopupMenuItem(value: 'doc', child: Text('Word DOC')),
                     PopupMenuItem(value: 'json', child: Text('JSON')),
                   ],
                 ),
@@ -2746,6 +3139,23 @@ class _AttachmentPreviewBody extends StatelessWidget {
     if (file.isImage && file.path != null && File(file.path!).existsSync()) {
       return InteractiveViewer(child: Image.file(File(file.path!), fit: BoxFit.contain));
     }
+    if (file.isPdf && file.path != null && File(file.path!).existsSync()) {
+      return SfPdfViewer.file(File(file.path!));
+    }
+    if (file.isTextPreviewable && file.path != null && File(file.path!).existsSync()) {
+      return FutureBuilder<String>(
+        future: File(file.path!).readAsString().then((value) => value.length > 6000 ? '${value.substring(0, 6000)}\n\n...' : value),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: SelectableText(snapshot.data!, style: const TextStyle(fontFamily: 'monospace')),
+          );
+        },
+      );
+    }
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -2757,7 +3167,9 @@ class _AttachmentPreviewBody extends StatelessWidget {
             Text(file.kindLabel, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 6),
             Text(
-              file.path == null ? 'Preview metadata is available. Attach again to enable file export/share.' : 'Use Export or Share to open this file in a compatible app.',
+              file.path == null
+                  ? 'Preview metadata is available. Attach again to enable file export/share.'
+                  : 'Libre Vault can keep and organize this file here. PDF, image, Markdown, text, CSV, JSON, HTML, and code files preview directly; Office files show metadata until a native renderer is added.',
               textAlign: TextAlign.center,
             ),
           ],
@@ -2767,214 +3179,64 @@ class _AttachmentPreviewBody extends StatelessWidget {
   }
 }
 
-class _SettingsSheet extends StatelessWidget {
+class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({required this.home});
 
   final _LibreNotesHomeState home;
 
   @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  int section = 0;
+  late final TextEditingController nameController = TextEditingController(text: widget.home.userName);
+  late final TextEditingController handleController = TextEditingController(text: widget.home.userHandle);
+
+  _LibreNotesHomeState get home => widget.home;
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    handleController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 720;
     return SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.88),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Row(
           children: [
-            Text('Settings', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
-            const SizedBox(height: 16),
-            SettingBlock(
-              title: 'Account',
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(backgroundColor: home.accent, foregroundColor: Colors.white, child: const Icon(Icons.shield_outlined)),
-                title: const Text('Local vault'),
-                subtitle: const Text('No sign-in required. Notes stay on this device unless you export or share them.'),
-              ),
-            ),
-            SettingBlock(
-              title: 'Appearance',
-              child: SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.monitor_outlined), label: Text('Auto')),
-                  ButtonSegment(value: ThemeMode.light, icon: Icon(Icons.light_mode_outlined), label: Text('Light')),
-                  ButtonSegment(value: ThemeMode.dark, icon: Icon(Icons.dark_mode_outlined), label: Text('Dark')),
+            SizedBox(
+              width: compact ? 92 : 220,
+              child: NavigationRail(
+                extended: !compact,
+                minExtendedWidth: 210,
+                selectedIndex: section,
+                onDestinationSelected: (value) => setState(() => section = value),
+                destinations: const [
+                  NavigationRailDestination(icon: Icon(Icons.person_outline), label: Text('Account')),
+                  NavigationRailDestination(icon: Icon(Icons.folder_copy_outlined), label: Text('Vault')),
+                  NavigationRailDestination(icon: Icon(Icons.contrast_outlined), label: Text('Appearance')),
+                  NavigationRailDestination(icon: Icon(Icons.palette_outlined), label: Text('Theme')),
+                  NavigationRailDestination(icon: Icon(Icons.download_outlined), label: Text('Export')),
+                  NavigationRailDestination(icon: Icon(Icons.accessibility_new_outlined), label: Text('Accessibility')),
+                  NavigationRailDestination(icon: Icon(Icons.delete_outline), label: Text('Trash')),
+                  NavigationRailDestination(icon: Icon(Icons.sell_outlined), label: Text('Tags')),
                 ],
-                selected: {home.themeMode},
-                onSelectionChanged: (value) => home.onThemeModeChanged(value.first),
               ),
             ),
-            SwitchListTile(
-              title: const Text('AMOLED dark'),
-              subtitle: const Text('Use true black app surfaces in dark mode.'),
-              value: home.amoledDark,
-              onChanged: home.onAmoledChanged,
-            ),
-            SwitchListTile(
-              title: const Text('Pure black'),
-              subtitle: const Text('Disable accent glow and force black surfaces in dark mode.'),
-              value: home.pureBlack,
-              onChanged: home.onPureBlackChanged,
-            ),
-            SwitchListTile(
-              title: const Text('Accent-tinted background'),
-              subtitle: const Text('Tint large surfaces with the selected accent color.'),
-              value: home.accentTintBackground,
-              onChanged: home.onAccentTintChanged,
-            ),
-            SwitchListTile(
-              title: const Text('Letter folder icons'),
-              subtitle: const Text('Show folder initials when there is room.'),
-              value: home.letterIcons,
-              onChanged: home.onLetterIconsChanged,
-            ),
-            SwitchListTile(
-              title: const Text('Dense notes'),
-              subtitle: const Text('Fit more notes on smaller screens.'),
-              value: home.denseNotes,
-              onChanged: home.onDenseNotesChanged,
-            ),
-            SettingBlock(
-              title: 'Theme',
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
+            VerticalDivider(width: 1, color: Theme.of(context).dividerColor.withValues(alpha: 0.45)),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                 children: [
-                  for (final color in accentChoices)
-                    InkWell(
-                      onTap: () => home.onAccentChanged(color),
-                      borderRadius: BorderRadius.circular(999),
-                      child: CircleAvatar(
-                        radius: 22,
-                        backgroundColor: color,
-                        child: home.accent == color ? const Icon(Icons.check, color: Colors.white) : null,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            SettingBlock(
-              title: 'Background set',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'calm', icon: Icon(Icons.blur_on_outlined), label: Text('Calm')),
-                      ButtonSegment(value: 'flat', icon: Icon(Icons.crop_square_outlined), label: Text('Flat')),
-                      ButtonSegment(value: 'black', icon: Icon(Icons.contrast_outlined), label: Text('Black')),
-                    ],
-                    selected: {home.pureBlack ? 'black' : home.accentTintBackground ? 'calm' : 'flat'},
-                    onSelectionChanged: (value) {
-                      switch (value.first) {
-                        case 'black':
-                          home.onPureBlackChanged(true);
-                          home.onAccentTintChanged(false);
-                          break;
-                        case 'flat':
-                          home.onPureBlackChanged(false);
-                          home.onAccentTintChanged(false);
-                          break;
-                        default:
-                          home.onPureBlackChanged(false);
-                          home.onAccentTintChanged(true);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: home._chooseBackgroundVisual,
-                        icon: const Icon(Icons.image_outlined),
-                        label: const Text('Image or GIF'),
-                      ),
-                      if (home.backgroundVisualPath != null)
-                        OutlinedButton.icon(
-                          onPressed: home._clearBackgroundVisual,
-                          icon: const Icon(Icons.clear),
-                          label: const Text('Clear visual'),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            SettingBlock(
-              title: 'Trash cleanup',
-              child: DropdownButtonFormField<int>(
-                initialValue: trashRetentionOptions.contains(home.trashRetentionDays) ? home.trashRetentionDays : 30,
-                decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Keep deleted notes for'),
-                items: const [
-                  DropdownMenuItem(value: 1, child: Text('1 day')),
-                  DropdownMenuItem(value: 7, child: Text('7 days')),
-                  DropdownMenuItem(value: 30, child: Text('30 days')),
-                  DropdownMenuItem(value: 90, child: Text('90 days')),
-                  DropdownMenuItem(value: 365, child: Text('1 year')),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    home._setTrashRetentionDays(value);
-                  }
-                },
-              ),
-            ),
-            SettingBlock(
-              title: 'Export',
-              child: DropdownButtonFormField<String>(
-                initialValue: home.preferredExportType,
-                decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Preferred note export type'),
-                items: const [
-                  DropdownMenuItem(value: 'md', child: Text('Markdown (.md)')),
-                  DropdownMenuItem(value: 'txt', child: Text('Plain text (.txt)')),
-                  DropdownMenuItem(value: 'html', child: Text('HTML (.html)')),
-                  DropdownMenuItem(value: 'json', child: Text('JSON (.json)')),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    home._setPreferredExportType(value);
-                  }
-                },
-              ),
-            ),
-            SettingBlock(
-              title: 'Accessibility',
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    title: const Text('Reading mode'),
-                    subtitle: const Text('Use larger, more relaxed preview text.'),
-                    value: home.readingMode,
-                    onChanged: home._setReadingMode,
-                  ),
-                  SwitchListTile(
-                    title: const Text('High contrast text'),
-                    subtitle: const Text('Prioritize stronger preview text contrast.'),
-                    value: home.highContrastText,
-                    onChanged: home._setHighContrastText,
-                  ),
-                  SwitchListTile(
-                    title: const Text('Reduce motion'),
-                    subtitle: const Text('Keep motion subtle for sensitive readers.'),
-                    value: home.reduceMotion,
-                    onChanged: home._setReduceMotion,
-                  ),
-                ],
-              ),
-            ),
-            SettingBlock(
-              title: 'Tag colors',
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final tag in notesTags(home.notes.where((note) => !note.isTrashed).toList()))
-                    ActionChip(
-                      avatar: CircleAvatar(backgroundColor: home.colorForTag(tag)),
-                      label: Text(tag),
-                      onPressed: () => home._chooseTagColor(tag),
-                    ),
+                  Text(_sectionTitle, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 16),
+                  ..._sectionChildren(context),
                 ],
               ),
             ),
@@ -2983,6 +3245,226 @@ class _SettingsSheet extends StatelessWidget {
       ),
     );
   }
+
+  String get _sectionTitle => const ['Account', 'Vault', 'Appearance', 'Theme', 'Export', 'Accessibility', 'Trash', 'Tag Colors'][section];
+
+  List<Widget> _sectionChildren(BuildContext context) {
+    return switch (section) {
+      0 => _accountSection(),
+      1 => _vaultSection(),
+      2 => _appearanceSection(),
+      3 => _themeSection(),
+      4 => _exportSection(),
+      5 => _accessibilitySection(),
+      6 => _trashSection(),
+      _ => _tagsSection(),
+    };
+  }
+
+  List<Widget> _accountSection() => [
+        SettingBlock(
+          title: 'Local profile',
+          child: Column(
+            children: [
+              TextField(controller: nameController, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Display name')),
+              const SizedBox(height: 12),
+              TextField(controller: handleController, decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Handle')),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    home._setUserProfile(nameController.text, handleController.text);
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save profile'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: CircleAvatar(backgroundColor: home.accent, foregroundColor: Colors.white, child: const Icon(Icons.shield_outlined)),
+          title: Text(home.userName),
+          subtitle: Text('@${home.userHandle} • offline local vault'),
+        ),
+      ];
+
+  List<Widget> _vaultSection() => [
+        SettingBlock(
+          title: 'Vault location',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(home.vaultFolderPath ?? 'Built-in app storage'),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  FilledButton.icon(onPressed: () => home._chooseVaultFolder(), icon: const Icon(Icons.folder_open_outlined), label: const Text('Choose folder')),
+                  FilledButton.tonalIcon(onPressed: () => home._chooseVaultFolder(encrypt: true), icon: const Icon(Icons.lock_outline), label: const Text('Encrypted folder')),
+                  OutlinedButton.icon(onPressed: home._importMarkdownFiles, icon: const Icon(Icons.upload_file_outlined), label: const Text('Import Markdown')),
+                  OutlinedButton.icon(onPressed: home._exportBackup, icon: const Icon(Icons.backup_outlined), label: const Text('Backup')),
+                  OutlinedButton.icon(onPressed: home._importBackup, icon: const Icon(Icons.restore_outlined), label: const Text('Restore')),
+                ],
+              ),
+            ],
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('External vault encryption'),
+          subtitle: const Text('Writes the selected vault folder as AES-GCM encrypted data when a password is set.'),
+          value: home.vaultEncrypted,
+          onChanged: (value) async {
+            if (value) {
+              final password = await home._promptVaultPassword(title: 'Vault password', action: 'Enable');
+              if (password == null || password.isEmpty) {
+                return;
+              }
+              home._setVaultEncryption(enabled: true, password: password);
+            } else {
+              home._setVaultEncryption(enabled: false);
+            }
+            setState(() {});
+          },
+        ),
+      ];
+
+  List<Widget> _appearanceSection() => [
+        SettingBlock(
+          title: 'Mode',
+          child: SegmentedButton<ThemeMode>(
+            segments: const [
+              ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.monitor_outlined), label: Text('Auto')),
+              ButtonSegment(value: ThemeMode.light, icon: Icon(Icons.light_mode_outlined), label: Text('Light')),
+              ButtonSegment(value: ThemeMode.dark, icon: Icon(Icons.dark_mode_outlined), label: Text('Dark')),
+            ],
+            selected: {home.themeMode},
+            onSelectionChanged: (value) => home.onThemeModeChanged(value.first),
+          ),
+        ),
+        SwitchListTile(title: const Text('AMOLED dark'), value: home.amoledDark, onChanged: home.onAmoledChanged),
+        SwitchListTile(title: const Text('Pure black'), value: home.pureBlack, onChanged: home.onPureBlackChanged),
+        SwitchListTile(title: const Text('Letter folder icons'), value: home.letterIcons, onChanged: home.onLetterIconsChanged),
+        SwitchListTile(title: const Text('Dense notes'), value: home.denseNotes, onChanged: home.onDenseNotesChanged),
+      ];
+
+  List<Widget> _themeSection() => [
+        SettingBlock(
+          title: 'Accent',
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(onPressed: home._chooseAccentColor, icon: const Icon(Icons.color_lens_outlined), label: const Text('Color wheel')),
+              for (final color in accentChoices)
+                InkWell(
+                  onTap: () => home.onAccentChanged(color),
+                  borderRadius: BorderRadius.circular(999),
+                  child: CircleAvatar(radius: 22, backgroundColor: color, child: home.accent.toARGB32() == color.toARGB32() ? const Icon(Icons.check, color: Colors.white) : null),
+                ),
+            ],
+          ),
+        ),
+        SettingBlock(
+          title: 'Background',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(title: const Text('Accent-tinted background'), value: home.accentTintBackground, onChanged: home.onAccentTintChanged),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton.icon(onPressed: home._chooseBackgroundVisual, icon: const Icon(Icons.image_outlined), label: const Text('Image or GIF')),
+                  if (home.backgroundVisualPath != null) OutlinedButton.icon(onPressed: home._clearBackgroundVisual, icon: const Icon(Icons.clear), label: const Text('Clear visual')),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ];
+
+  List<Widget> _exportSection() => [
+        SettingBlock(
+          title: 'Preferred note export type',
+          child: DropdownButtonFormField<String>(
+            initialValue: home.preferredExportType,
+            decoration: const InputDecoration(border: OutlineInputBorder()),
+            items: const [
+              DropdownMenuItem(value: 'md', child: Text('Markdown (.md)')),
+              DropdownMenuItem(value: 'txt', child: Text('Plain text (.txt)')),
+              DropdownMenuItem(value: 'html', child: Text('HTML (.html)')),
+              DropdownMenuItem(value: 'pdf', child: Text('PDF (.pdf)')),
+              DropdownMenuItem(value: 'doc', child: Text('Word DOC (.doc)')),
+              DropdownMenuItem(value: 'json', child: Text('JSON (.json)')),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                home._setPreferredExportType(value);
+              }
+            },
+          ),
+        ),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            FilledButton.icon(onPressed: () => home._exportSelectedNote('pdf'), icon: const Icon(Icons.picture_as_pdf_outlined), label: const Text('Export PDF')),
+            FilledButton.tonalIcon(onPressed: () => home._exportSelectedNote('doc'), icon: const Icon(Icons.description_outlined), label: const Text('Export DOC')),
+            OutlinedButton.icon(onPressed: () => home._shareSelectedNoteAs('pdf'), icon: const Icon(Icons.share_outlined), label: const Text('Share PDF')),
+          ],
+        ),
+      ];
+
+  List<Widget> _accessibilitySection() => [
+        SwitchListTile(title: const Text('Reading mode'), subtitle: const Text('Larger, more relaxed preview text.'), value: home.readingMode, onChanged: home._setReadingMode),
+        SwitchListTile(title: const Text('High contrast text'), value: home.highContrastText, onChanged: home._setHighContrastText),
+        SwitchListTile(title: const Text('Reduce motion'), value: home.reduceMotion, onChanged: home._setReduceMotion),
+      ];
+
+  List<Widget> _trashSection() => [
+        SettingBlock(
+          title: 'Keep deleted notes for',
+          child: DropdownButtonFormField<int>(
+            initialValue: trashRetentionOptions.contains(home.trashRetentionDays) ? home.trashRetentionDays : 30,
+            decoration: const InputDecoration(border: OutlineInputBorder()),
+            items: const [
+              DropdownMenuItem(value: 1, child: Text('1 day')),
+              DropdownMenuItem(value: 7, child: Text('7 days')),
+              DropdownMenuItem(value: 30, child: Text('30 days')),
+              DropdownMenuItem(value: 90, child: Text('90 days')),
+              DropdownMenuItem(value: 365, child: Text('1 year')),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                home._setTrashRetentionDays(value);
+              }
+            },
+          ),
+        ),
+      ];
+
+  List<Widget> _tagsSection() => [
+        SettingBlock(
+          title: 'Tag colors',
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final tag in notesTags(home.notes.where((note) => !note.isTrashed).toList()))
+                ActionChip(
+                  avatar: CircleAvatar(backgroundColor: home.colorForTag(tag)),
+                  label: Text(tag),
+                  onPressed: () => home._chooseTagColor(tag),
+                ),
+            ],
+          ),
+        ),
+      ];
 }
 
 class SettingBlock extends StatelessWidget {
@@ -3007,11 +3489,18 @@ class SettingBlock extends StatelessWidget {
   }
 }
 
-class ColorPickerSheet extends StatelessWidget {
-  const ColorPickerSheet({super.key, required this.title, required this.selectedIndex});
+class ColorPickerSheet extends StatefulWidget {
+  const ColorPickerSheet({super.key, required this.title, required this.initialColor});
 
   final String title;
-  final int selectedIndex;
+  final Color initialColor;
+
+  @override
+  State<ColorPickerSheet> createState() => _ColorPickerSheetState();
+}
+
+class _ColorPickerSheetState extends State<ColorPickerSheet> {
+  late Color selected = widget.initialColor;
 
   @override
   Widget build(BuildContext context) {
@@ -3022,8 +3511,18 @@ class ColorPickerSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+            Text(widget.title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
             const SizedBox(height: 14),
+            ColorPicker(
+              pickerColor: selected,
+              onColorChanged: (color) => setState(() => selected = color),
+              pickerAreaHeightPercent: 0.68,
+              enableAlpha: false,
+              displayThumbColor: true,
+              paletteType: PaletteType.hueWheel,
+              labelTypes: const [],
+            ),
+            const SizedBox(height: 10),
             GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -3035,21 +3534,100 @@ class ColorPickerSheet extends StatelessWidget {
               itemCount: systemColors.length,
               itemBuilder: (context, index) {
                 final color = systemColors[index];
-                final selected = selectedIndex % systemColors.length == index;
+                final isSelected = selected.toARGB32() == color.toARGB32();
                 return InkWell(
                   borderRadius: BorderRadius.circular(999),
-                  onTap: () => Navigator.pop(context, index),
+                  onTap: () => setState(() => selected = color),
                   child: CircleAvatar(
                     backgroundColor: color,
-                    child: selected ? const Icon(Icons.check, color: Colors.white) : null,
+                    child: isSelected ? const Icon(Icons.check, color: Colors.white) : null,
                   ),
                 );
               },
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => Navigator.pop(context, selected),
+                icon: const Icon(Icons.check),
+                label: const Text('Use color'),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+class FolderEditResult {
+  const FolderEditResult(this.name, this.iconKey);
+
+  final String name;
+  final String iconKey;
+}
+
+class FolderDialog extends StatefulWidget {
+  const FolderDialog({super.key});
+
+  @override
+  State<FolderDialog> createState() => _FolderDialogState();
+}
+
+class _FolderDialogState extends State<FolderDialog> {
+  final TextEditingController nameController = TextEditingController();
+  String iconKey = 'folder';
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('New folder'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(controller: nameController, autofocus: true, decoration: const InputDecoration(labelText: 'Folder name')),
+            const SizedBox(height: 16),
+            Text('Icon', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final item in folderIconChoices.entries)
+                  ChoiceChip(
+                    selected: iconKey == item.key,
+                    avatar: Icon(folderIcon(item.key), size: 18),
+                    label: Text(item.value),
+                    onSelected: (_) => setState(() => iconKey = item.key),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: _submit, child: const Text('Create')),
+      ],
+    );
+  }
+
+  void _submit() {
+    final name = nameController.text.trim();
+    if (name.isEmpty) {
+      return;
+    }
+    Navigator.pop(context, FolderEditResult(name, iconKey));
   }
 }
 
@@ -3129,6 +3707,7 @@ class TextInputDialog extends StatefulWidget {
     required this.primaryAction,
     this.initialValue = '',
     this.hint,
+    this.obscureText = false,
   });
 
   final String title;
@@ -3136,6 +3715,7 @@ class TextInputDialog extends StatefulWidget {
   final String primaryAction;
   final String initialValue;
   final String? hint;
+  final bool obscureText;
 
   @override
   State<TextInputDialog> createState() => _TextInputDialogState();
@@ -3163,6 +3743,7 @@ class _TextInputDialogState extends State<TextInputDialog> {
       content: TextField(
         controller: controller,
         autofocus: true,
+        obscureText: widget.obscureText,
         textInputAction: TextInputAction.done,
         decoration: InputDecoration(labelText: widget.label, hintText: widget.hint),
         onSubmitted: (_) => _submit(),
@@ -3503,7 +4084,9 @@ class AttachmentFile {
   final bool archived;
 
   String get id => path ?? name;
+  bool get isPdf => _extensionMatches(['.pdf']);
   bool get isImage => _extensionMatches(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+  bool get isTextPreviewable => _extensionMatches(['.md', '.markdown', '.txt', '.csv', '.json', '.xml', '.html', '.css', '.js', '.dart']);
   bool get isDocument => _extensionMatches(['.pdf', '.doc', '.docx', '.rtf', '.xls', '.xlsx', '.csv', '.ppt', '.pptx']);
   String get kindLabel {
     if (_extensionMatches(['.pdf'])) return 'PDF document';
@@ -3547,10 +4130,18 @@ IconData folderIcon(String name, {bool selected = false}) {
     'Starred' => selected ? Icons.star : Icons.star_border,
     'Archive' => selected ? Icons.archive : Icons.archive_outlined,
     'Trash' => selected ? Icons.delete : Icons.delete_outline,
-    'Inbox' => Icons.inbox_outlined,
-    'Projects' => selected ? Icons.folder : Icons.folder_outlined,
-    'Study' => Icons.school_outlined,
-    'Personal' => Icons.person_outline,
+    'inbox' => Icons.inbox_outlined,
+    'projects' => selected ? Icons.folder : Icons.folder_outlined,
+    'study' => Icons.school_outlined,
+    'personal' => Icons.person_outline,
+    'work' => Icons.work_outline,
+    'book' => Icons.menu_book_outlined,
+    'code' => Icons.code,
+    'lock' => Icons.lock_outline,
+    'photo' => Icons.photo_outlined,
+    'music' => Icons.music_note_outlined,
+    'travel' => Icons.flight_takeoff_outlined,
+    'health' => Icons.favorite_border,
     _ => selected ? Icons.folder : Icons.folder_outlined,
   };
 }
@@ -3606,6 +4197,22 @@ String safeFileName(String value) {
   return cleaned.isEmpty ? 'untitled-note' : cleaned;
 }
 
+String baseNameWithoutExtension(String path) {
+  final name = path.split(RegExp(r'[\\/]')).last;
+  final dot = name.lastIndexOf('.');
+  return dot <= 0 ? name : name.substring(0, dot);
+}
+
+String markdownTitle(String body) {
+  for (final line in body.split('\n')) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith('# ')) {
+      return trimmed.substring(2).trim();
+    }
+  }
+  return '';
+}
+
 const vaultStorageKey = 'libre_notes_vault_v1';
 const appSettingsStorageKey = 'libre_notes_app_settings_v1';
 const trashRetentionOptions = [1, 7, 30, 90, 365];
@@ -3613,6 +4220,32 @@ const trashRetentionOptions = [1, 7, 30, 90, 365];
 final sampleUpdatedAt = DateTime(2026, 4, 29, 19, 45);
 
 final seedFolders = ['Inbox', 'Personal', 'Projects', 'Study'];
+final seedFolderIcons = {
+  'All': 'All',
+  'Starred': 'Starred',
+  'Archive': 'Archive',
+  'Trash': 'Trash',
+  'Inbox': 'inbox',
+  'Personal': 'personal',
+  'Projects': 'projects',
+  'Study': 'study',
+};
+
+const folderIconChoices = {
+  'folder': 'Folder',
+  'inbox': 'Inbox',
+  'projects': 'Project',
+  'study': 'Study',
+  'personal': 'Person',
+  'work': 'Work',
+  'book': 'Book',
+  'code': 'Code',
+  'lock': 'Private',
+  'photo': 'Photo',
+  'music': 'Audio',
+  'travel': 'Travel',
+  'health': 'Health',
+};
 
 final seedNotes = [
   Note(
