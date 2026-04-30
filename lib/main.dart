@@ -194,7 +194,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final fileCount = note.attachments.where((file) => !file.archived).length;
     return Scaffold(
       backgroundColor: scheme.surface,
       body: Center(
@@ -1933,6 +1932,7 @@ class NoteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final fileCount = note.attachments.where((file) => !file.archived).length;
     return Dismissible(
       key: ValueKey(note.id),
       direction: DismissDirection.horizontal,
