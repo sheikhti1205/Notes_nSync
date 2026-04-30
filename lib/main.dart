@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -192,6 +194,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final fileCount = note.attachments.where((file) => !file.archived).length;
     return Scaffold(
       backgroundColor: scheme.surface,
       body: Center(
@@ -200,7 +203,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           builder: (context, child) {
             final value = Curves.easeOutCubic.transform(controller.value);
             return Opacity(
-              opacity: value.clamp(0.0, 1.0),
+              opacity: value.clamp(0.0, 1.0).toDouble(),
               child: Transform.translate(
                 offset: Offset(0, 18 * (1 - value)),
                 child: Transform.scale(
@@ -325,13 +328,19 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   List<Note> notes = [...seedNotes];
   List<String> customFolders = [...seedFolders];
   Map<String, int> tagColorIndexes = {};
+  Map<String, double> attachmentPositions = {};
+  String? backgroundVisualPath;
   String selectedNoteId = seedNotes.first.id;
   String selectedFolder = 'All';
   String query = '';
   String sortMode = 'updatedDesc';
+  String preferredExportType = 'md';
   int compactPage = 0;
   int trashRetentionDays = 30;
   bool previewCards = true;
+  bool readingMode = false;
+  bool highContrastText = false;
+  bool reduceMotion = false;
   bool syncingEditor = false;
 
   Color get accent => widget.accent;
@@ -423,8 +432,15 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
             .toList();
         trashRetentionDays = _readInt(decoded['trashRetentionDays'] ?? settings['trashRetentionDays'], fallback: trashRetentionDays);
         sortMode = (settings['sortMode'] as String?) ?? sortMode;
+        preferredExportType = (settings['preferredExportType'] as String?) ?? preferredExportType;
+        readingMode = settings['readingMode'] as bool? ?? readingMode;
+        highContrastText = settings['highContrastText'] as bool? ?? highContrastText;
+        reduceMotion = settings['reduceMotion'] as bool? ?? reduceMotion;
+        backgroundVisualPath = settings['backgroundVisualPath'] as String? ?? backgroundVisualPath;
         final rawTagColors = Map<String, dynamic>.from((decoded['tagColors'] as Map?) ?? (settings['tagColors'] as Map?) ?? const {});
         tagColorIndexes = rawTagColors.map((key, value) => MapEntry(key, value is int ? value : int.tryParse(value.toString()) ?? 0));
+        final rawPositions = Map<String, dynamic>.from(settings['attachmentPositions'] as Map? ?? const {});
+        attachmentPositions = rawPositions.map((key, value) => MapEntry(key, value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0));
       } else {
         noteItems = decoded as List<dynamic>;
         folderItems = const [];
@@ -465,6 +481,12 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
       'settings': {
         'trashRetentionDays': trashRetentionDays,
         'sortMode': sortMode,
+        'preferredExportType': preferredExportType,
+        'readingMode': readingMode,
+        'highContrastText': highContrastText,
+        'reduceMotion': reduceMotion,
+        'attachmentPositions': attachmentPositions,
+        'backgroundVisualPath': backgroundVisualPath,
         'themeMode': themeMode.name,
         'amoledDark': amoledDark,
         'pureBlack': pureBlack,
@@ -481,7 +503,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final tint = widget.accentTintBackground && !widget.pureBlack
+    final tint = widget.accentTintBackground && !widget.pureBlack && !reduceMotion
         ? BoxShadow(
             color: widget.accent.withValues(alpha: dark ? 0.12 : 0.14),
             blurRadius: 120,
@@ -495,6 +517,14 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         final width = constraints.maxWidth;
         final compact = width < 700;
         final medium = width >= 700 && width < 1050;
+
+        final backgroundImage = backgroundVisualPath != null && File(backgroundVisualPath!).existsSync() && !pureBlack
+            ? DecorationImage(
+                image: FileImage(File(backgroundVisualPath!)),
+                fit: BoxFit.cover,
+                opacity: dark ? 0.14 : 0.1,
+              )
+            : null;
 
         return PopScope(
           canPop: !compact || compactPage == 0,
@@ -519,6 +549,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
               decoration: BoxDecoration(
                 color: widget.pureBlack && dark ? Colors.black : scheme.surface,
                 boxShadow: tint == null ? null : [tint],
+                image: backgroundImage,
               ),
               child: SafeArea(
                 child: compact
@@ -778,6 +809,10 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     _moveNoteToTrash(note);
   }
 
+  void _archiveListedNote(Note note) {
+    _archiveNote(note);
+  }
+
   void _archiveSelectedNote() {
     _archiveNote(selectedNote);
   }
@@ -1022,10 +1057,83 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     final index = notes.indexWhere((note) => note.id == selectedNoteId);
     setState(() {
       notes[index] = notes[index].copyWith(
-        attachments: notes[index].attachments.where((item) => item.name != file.name).toList(),
+        attachments: notes[index].attachments.where((item) => item.id != file.id).toList(),
       );
     });
     _queuePersist();
+  }
+
+  void _archiveAttachment(AttachmentFile file) {
+    final index = notes.indexWhere((note) => note.id == selectedNoteId);
+    if (index == -1) {
+      return;
+    }
+    setState(() {
+      notes[index] = notes[index].copyWith(
+        attachments: notes[index]
+            .attachments
+            .map((item) => item.id == file.id ? item.copyWith(archived: true) : item)
+            .toList(),
+      );
+    });
+    _queuePersist();
+    _showSnack('${file.name} archived.');
+  }
+
+  Future<void> _openAttachmentPreview(AttachmentFile file) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => AttachmentPreviewSheet(
+        file: file,
+        initialPosition: attachmentPositions[file.id] ?? 0,
+        onPositionChanged: (value) {
+          attachmentPositions = {...attachmentPositions, file.id: value};
+          _queuePersist();
+        },
+        onShare: () => _shareAttachment(file),
+        onShareAs: () => _shareAttachmentAs(file),
+        onExport: () => _exportAttachment(file),
+        onArchive: () {
+          Navigator.pop(context);
+          _archiveAttachment(file);
+        },
+        onDelete: () {
+          Navigator.pop(context);
+          _removeAttachment(file);
+        },
+      ),
+    );
+  }
+
+  Future<void> _shareAttachment(AttachmentFile file) async {
+    if (file.path != null && File(file.path!).existsSync()) {
+      await SharePlus.instance.share(ShareParams(title: file.name, files: [XFile(file.path!)]));
+      return;
+    }
+    await SharePlus.instance.share(ShareParams(title: file.name, text: '${file.name}\n${file.meta}'));
+  }
+
+  Future<void> _shareAttachmentAs(AttachmentFile file) async {
+    final label = '${file.name}\nType: ${file.kindLabel}\nStored in Libre Vault';
+    await SharePlus.instance.share(ShareParams(title: 'Libre Vault file', subject: file.name, text: label));
+  }
+
+  Future<void> _exportAttachment(AttachmentFile file) async {
+    if (file.path == null || !File(file.path!).existsSync()) {
+      _showSnack('This attachment was added before file paths were saved.');
+      return;
+    }
+    final bytes = await File(file.path!).readAsBytes();
+    final saved = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export ${file.name}',
+      fileName: file.name,
+      bytes: bytes,
+    );
+    if (saved != null) {
+      _showSnack('${file.name} exported.');
+    }
   }
 
   void _wrapSelection(String prefix, String suffix, String placeholder) {
@@ -1152,6 +1260,87 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     await SharePlus.instance.share(params);
   }
 
+  Future<void> _exportSelectedNote([String? type]) async {
+    final exportType = type ?? preferredExportType;
+    final payload = _noteExportPayload(selectedNote, exportType);
+    final bytes = Uint8List.fromList(utf8.encode(payload));
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export ${selectedNote.title}',
+      fileName: '${safeFileName(selectedNote.title)}.$exportType',
+      bytes: bytes,
+      type: FileType.custom,
+      allowedExtensions: [exportType],
+    );
+    if (path != null) {
+      _showSnack('${selectedNote.title} exported.');
+    }
+  }
+
+  Future<void> _shareSelectedNoteAs([String? type]) async {
+    final exportType = type ?? preferredExportType;
+    await SharePlus.instance.share(ShareParams(
+      title: selectedNote.title,
+      subject: '${selectedNote.title} .$exportType',
+      text: _noteExportPayload(selectedNote, exportType),
+    ));
+  }
+
+  String _noteExportPayload(Note note, String type) {
+    return switch (type) {
+      'txt' => note.body,
+      'json' => const JsonEncoder.withIndent('  ').convert(note.toJson()),
+      'html' => '<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape.convert(note.title)}</title></head><body><pre>${htmlEscape.convert(note.body)}</pre></body></html>',
+      _ => note.body,
+    };
+  }
+
+  void _setPreferredExportType(String value) {
+    setState(() => preferredExportType = value);
+    _queuePersist();
+  }
+
+  void _setReadingMode(bool value) {
+    setState(() => readingMode = value);
+    _queuePersist();
+  }
+
+  void _setHighContrastText(bool value) {
+    setState(() => highContrastText = value);
+    _queuePersist();
+  }
+
+  void _setReduceMotion(bool value) {
+    setState(() => reduceMotion = value);
+    _queuePersist();
+  }
+
+  Future<void> _chooseBackgroundVisual() async {
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Choose background image or GIF',
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+      withData: false,
+    );
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+    final path = result.files.first.path;
+    if (path == null) {
+      _showSnack('Could not read that background file.');
+      return;
+    }
+    setState(() {
+      backgroundVisualPath = path;
+      reduceMotion = false;
+    });
+    _queuePersist();
+  }
+
+  void _clearBackgroundVisual() {
+    setState(() => backgroundVisualPath = null);
+    _queuePersist();
+  }
+
   Future<void> _exportBackup() async {
     final bytes = Uint8List.fromList(utf8.encode(_encodedVault()));
     final fileName = 'libre-notes-backup-${DateTime.now().millisecondsSinceEpoch}.json';
@@ -1201,6 +1390,13 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         return;
       }
       trashRetentionDays = _readInt(decoded['trashRetentionDays'] ?? settings['trashRetentionDays'], fallback: trashRetentionDays);
+      preferredExportType = (settings['preferredExportType'] as String?) ?? preferredExportType;
+      readingMode = settings['readingMode'] as bool? ?? readingMode;
+      highContrastText = settings['highContrastText'] as bool? ?? highContrastText;
+      reduceMotion = settings['reduceMotion'] as bool? ?? reduceMotion;
+      backgroundVisualPath = settings['backgroundVisualPath'] as String? ?? backgroundVisualPath;
+      final rawPositions = Map<String, dynamic>.from(settings['attachmentPositions'] as Map? ?? const {});
+      attachmentPositions = rawPositions.map((key, value) => MapEntry(key, value is num ? value.toDouble() : double.tryParse(value.toString()) ?? 0));
       final cleanedNotes = _dropExpiredTrash(restoredNotes);
       _applyBackupSettings(settings);
       setState(() {
@@ -1279,7 +1475,7 @@ class _CompactHome extends StatelessWidget {
       children: [
         _NotesPane(home: home, fullWidth: true),
         _EditorPane(home: home, compact: true),
-        PreviewPane(note: home.selectedNote, compact: true),
+        PreviewPane(home: home, note: home.selectedNote, compact: true),
         _AttachmentsPane(home: home, compact: true),
       ],
     );
@@ -1381,7 +1577,7 @@ class _ExpandedHome extends StatelessWidget {
                   children: [
                     Expanded(child: _EditorPane(home: home)),
                     const VerticalDivider(width: 1),
-                    Expanded(child: PreviewPane(note: home.selectedNote)),
+                    Expanded(child: PreviewPane(home: home, note: home.selectedNote)),
                   ],
                 ),
               ),
@@ -1697,6 +1893,7 @@ class _NotesPane extends StatelessWidget {
                           home._selectNote(note);
                           home._toggleStar();
                         },
+                        onArchive: () => note.isArchived ? home._restoreNote(note) : home._archiveListedNote(note),
                         onDelete: () => home._deleteNote(note),
                         onTagColor: () => home._chooseTagColor(note.tag),
                       );
@@ -1718,6 +1915,7 @@ class NoteCard extends StatelessWidget {
     required this.tagColor,
     required this.onTap,
     required this.onStar,
+    required this.onArchive,
     required this.onDelete,
     required this.onTagColor,
   });
@@ -1728,6 +1926,7 @@ class NoteCard extends StatelessWidget {
   final Color tagColor;
   final VoidCallback onTap;
   final VoidCallback onStar;
+  final VoidCallback onArchive;
   final VoidCallback onDelete;
   final VoidCallback onTagColor;
 
@@ -1736,8 +1935,17 @@ class NoteCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Dismissible(
       key: ValueKey(note.id),
-      direction: DismissDirection.endToStart,
+      direction: DismissDirection.horizontal,
       background: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 18),
+        decoration: BoxDecoration(
+          color: scheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(Icons.archive_outlined, color: scheme.onSecondaryContainer),
+      ),
+      secondaryBackground: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 18),
         decoration: BoxDecoration(
@@ -1746,7 +1954,13 @@ class NoteCard extends StatelessWidget {
         ),
         child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
       ),
-      onDismissed: (_) => onDelete(),
+      onDismissed: (direction) {
+        if (direction == DismissDirection.startToEnd) {
+          onArchive();
+        } else {
+          onDelete();
+        }
+      },
       child: Card(
         margin: EdgeInsets.zero,
         color: selected ? scheme.primaryContainer.withValues(alpha: 0.42) : scheme.surfaceContainerHighest.withValues(alpha: 0.45),
@@ -1806,7 +2020,7 @@ class NoteCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '${note.folder}  -  ${relativeDate(note.updatedAt)}  -  ${note.wordCount} words${note.attachments.isEmpty ? '' : '  -  ${note.attachments.length} files'}',
+                        '${note.folder}  -  ${relativeDate(note.updatedAt)}  -  ${note.wordCount} words${fileCount == 0 ? '' : '  -  $fileCount files'}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelMedium,
@@ -1889,7 +2103,7 @@ class _EditorPreviewTabs extends StatelessWidget {
             controller: home.editorTabs,
             children: [
               _EditorPane(home: home),
-              PreviewPane(note: home.selectedNote),
+              PreviewPane(home: home, note: home.selectedNote),
             ],
           ),
         ),
@@ -2026,8 +2240,9 @@ class _ToolButton extends StatelessWidget {
 }
 
 class PreviewPane extends StatelessWidget {
-  const PreviewPane({super.key, required this.note, this.compact = false});
+  const PreviewPane({super.key, required this.home, required this.note, this.compact = false});
 
+  final _LibreNotesHomeState home;
   final Note note;
   final bool compact;
 
@@ -2043,6 +2258,31 @@ class PreviewPane extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 10),
               child: _NoteHeader(note: note),
             ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('Preview', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+                ),
+                _PreviewActionButton(compact: compact, icon: Icons.download_outlined, label: 'Export', onPressed: () => home._exportSelectedNote()),
+                const SizedBox(width: 8),
+                _PreviewActionButton(compact: compact, icon: Icons.share_outlined, label: 'Share', onPressed: home._shareNote),
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: 'Share as',
+                  icon: const Icon(Icons.ios_share_outlined),
+                  onSelected: home._shareSelectedNoteAs,
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'md', child: Text('Markdown')),
+                    PopupMenuItem(value: 'txt', child: Text('Plain text')),
+                    PopupMenuItem(value: 'html', child: Text('HTML')),
+                    PopupMenuItem(value: 'json', child: Text('JSON')),
+                  ],
+                ),
+              ],
+            ),
+          ),
           Expanded(
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -2057,7 +2297,11 @@ class PreviewPane extends StatelessWidget {
                 styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
                   h1: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
                   h2: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-                  p: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55),
+                  p: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        height: home.readingMode ? 1.8 : 1.55,
+                        fontSize: home.readingMode ? 18 : null,
+                        color: home.highContrastText ? Theme.of(context).colorScheme.onSurface : null,
+                      ),
                   codeblockDecoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
@@ -2073,6 +2317,23 @@ class PreviewPane extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _PreviewActionButton extends StatelessWidget {
+  const _PreviewActionButton({required this.icon, required this.label, required this.onPressed, this.compact = false});
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (compact) {
+      return IconButton.filledTonal(tooltip: label, onPressed: onPressed, icon: Icon(icon));
+    }
+    return FilledButton.tonalIcon(onPressed: onPressed, icon: Icon(icon, size: 18), label: Text(label));
   }
 }
 
@@ -2113,7 +2374,7 @@ class _AttachmentsPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final attachments = home.selectedNote.attachments;
+    final attachments = home.selectedNote.attachments.where((file) => !file.archived).toList();
     return Container(
       constraints: BoxConstraints(maxHeight: compact ? double.infinity : 178),
       padding: EdgeInsets.fromLTRB(compact ? 12 : 16, 10, compact ? 12 : 16, compact ? 80 : 12),
@@ -2157,14 +2418,28 @@ class _AttachmentsPane extends StatelessWidget {
                         itemCount: attachments.length,
                         separatorBuilder: (_, __) => const SizedBox(width: 10),
                         itemBuilder: (context, index) => SizedBox(
-                          width: 210,
-                          child: AttachmentCard(file: attachments[index], onRemove: () => home._removeAttachment(attachments[index])),
+                          width: 260,
+                          child: AttachmentCard(
+                            file: attachments[index],
+                            onPreview: () => home._openAttachmentPreview(attachments[index]),
+                            onArchive: () => home._archiveAttachment(attachments[index]),
+                            onDelete: () => home._removeAttachment(attachments[index]),
+                            onShare: () => home._shareAttachment(attachments[index]),
+                            onExport: () => home._exportAttachment(attachments[index]),
+                          ),
                         ),
                       )
                     : ListView.separated(
                         itemCount: attachments.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) => AttachmentRow(file: attachments[index], onRemove: () => home._removeAttachment(attachments[index])),
+                        itemBuilder: (context, index) => AttachmentRow(
+                          file: attachments[index],
+                          onPreview: () => home._openAttachmentPreview(attachments[index]),
+                          onArchive: () => home._archiveAttachment(attachments[index]),
+                          onDelete: () => home._removeAttachment(attachments[index]),
+                          onShare: () => home._shareAttachment(attachments[index]),
+                          onExport: () => home._exportAttachment(attachments[index]),
+                        ),
                       ),
           ),
         ],
@@ -2174,34 +2449,84 @@ class _AttachmentsPane extends StatelessWidget {
 }
 
 class AttachmentCard extends StatelessWidget {
-  const AttachmentCard({super.key, required this.file, required this.onRemove});
+  const AttachmentCard({
+    super.key,
+    required this.file,
+    required this.onPreview,
+    required this.onArchive,
+    required this.onDelete,
+    required this.onShare,
+    required this.onExport,
+  });
 
   final AttachmentFile file;
-  final VoidCallback onRemove;
+  final VoidCallback onPreview;
+  final VoidCallback onArchive;
+  final VoidCallback onDelete;
+  final VoidCallback onShare;
+  final VoidCallback onExport;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    final scheme = Theme.of(context).colorScheme;
+    return Dismissible(
+      key: ValueKey(file.id),
+      direction: DismissDirection.horizontal,
+      background: _SwipeBackground(alignment: Alignment.centerLeft, icon: Icons.archive_outlined, color: scheme.secondaryContainer, iconColor: scheme.onSecondaryContainer),
+      secondaryBackground: _SwipeBackground(alignment: Alignment.centerRight, icon: Icons.delete_outline, color: scheme.errorContainer, iconColor: scheme.onErrorContainer),
+      onDismissed: (direction) => direction == DismissDirection.startToEnd ? onArchive() : onDelete(),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onPreview,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                CircleAvatar(
-                  backgroundColor: file.color.withValues(alpha: 0.18),
-                  child: Icon(file.icon, color: file.color),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 24,
+                      backgroundColor: file.color.withValues(alpha: 0.18),
+                      child: Icon(file.icon, color: file.color),
+                    ),
+                    const Spacer(),
+                    PopupMenuButton<String>(
+                      tooltip: 'File options',
+                      onSelected: (value) {
+                        switch (value) {
+                          case 'share':
+                            onShare();
+                            break;
+                          case 'export':
+                            onExport();
+                            break;
+                          case 'archive':
+                            onArchive();
+                            break;
+                          case 'delete':
+                            onDelete();
+                            break;
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(value: 'share', child: Text('Share')),
+                        PopupMenuItem(value: 'export', child: Text('Export')),
+                        PopupMenuItem(value: 'archive', child: Text('Archive')),
+                        PopupMenuItem(value: 'delete', child: Text('Delete')),
+                      ],
+                    ),
+                  ],
                 ),
                 const Spacer(),
-                IconButton(tooltip: 'Remove', onPressed: onRemove, icon: const Icon(Icons.close, size: 18)),
+                Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
+                const SizedBox(height: 4),
+                Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ),
-            const Spacer(),
-            Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
-            Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ],
+          ),
         ),
       ),
     );
@@ -2209,23 +2534,234 @@ class AttachmentCard extends StatelessWidget {
 }
 
 class AttachmentRow extends StatelessWidget {
-  const AttachmentRow({super.key, required this.file, required this.onRemove});
+  const AttachmentRow({
+    super.key,
+    required this.file,
+    required this.onPreview,
+    required this.onArchive,
+    required this.onDelete,
+    required this.onShare,
+    required this.onExport,
+  });
 
   final AttachmentFile file;
-  final VoidCallback onRemove;
+  final VoidCallback onPreview;
+  final VoidCallback onArchive;
+  final VoidCallback onDelete;
+  final VoidCallback onShare;
+  final VoidCallback onExport;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: file.color.withValues(alpha: 0.2),
-          child: Icon(file.icon, color: file.color),
+    final scheme = Theme.of(context).colorScheme;
+    return Dismissible(
+      key: ValueKey(file.id),
+      direction: DismissDirection.horizontal,
+      background: _SwipeBackground(alignment: Alignment.centerLeft, icon: Icons.archive_outlined, color: scheme.secondaryContainer, iconColor: scheme.onSecondaryContainer),
+      secondaryBackground: _SwipeBackground(alignment: Alignment.centerRight, icon: Icons.delete_outline, color: scheme.errorContainer, iconColor: scheme.onErrorContainer),
+      onDismissed: (direction) => direction == DismissDirection.startToEnd ? onArchive() : onDelete(),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          minVerticalPadding: 18,
+          onTap: onPreview,
+          leading: CircleAvatar(
+            radius: 25,
+            backgroundColor: file.color.withValues(alpha: 0.2),
+            child: Icon(file.icon, color: file.color),
+          ),
+          title: Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+          subtitle: Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: PopupMenuButton<String>(
+            tooltip: 'File options',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'share':
+                  onShare();
+                  break;
+                case 'export':
+                  onExport();
+                  break;
+                case 'archive':
+                  onArchive();
+                  break;
+                case 'delete':
+                  onDelete();
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'share', child: Text('Share')),
+              PopupMenuItem(value: 'export', child: Text('Export')),
+              PopupMenuItem(value: 'archive', child: Text('Archive')),
+              PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
         ),
-        title: Text(file.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
-        subtitle: Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
-        trailing: IconButton(tooltip: 'Remove', onPressed: onRemove, icon: const Icon(Icons.close)),
+      ),
+    );
+  }
+}
+
+class _SwipeBackground extends StatelessWidget {
+  const _SwipeBackground({required this.alignment, required this.icon, required this.color, required this.iconColor});
+
+  final Alignment alignment;
+  final IconData icon;
+  final Color color;
+  final Color iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: alignment,
+      padding: EdgeInsets.only(left: alignment == Alignment.centerLeft ? 18 : 0, right: alignment == Alignment.centerRight ? 18 : 0),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
+      child: Icon(icon, color: iconColor),
+    );
+  }
+}
+
+class AttachmentPreviewSheet extends StatefulWidget {
+  const AttachmentPreviewSheet({
+    super.key,
+    required this.file,
+    required this.initialPosition,
+    required this.onPositionChanged,
+    required this.onShare,
+    required this.onShareAs,
+    required this.onExport,
+    required this.onArchive,
+    required this.onDelete,
+  });
+
+  final AttachmentFile file;
+  final double initialPosition;
+  final ValueChanged<double> onPositionChanged;
+  final VoidCallback onShare;
+  final VoidCallback onShareAs;
+  final VoidCallback onExport;
+  final VoidCallback onArchive;
+  final VoidCallback onDelete;
+
+  @override
+  State<AttachmentPreviewSheet> createState() => _AttachmentPreviewSheetState();
+}
+
+class _AttachmentPreviewSheetState extends State<AttachmentPreviewSheet> {
+  late double position = widget.initialPosition.clamp(0, 100).toDouble();
+
+  @override
+  void dispose() {
+    widget.onPositionChanged(position);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final file = widget.file;
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: DraggableScrollableSheet(
+        expand: false,
+        minChildSize: 0.45,
+        initialChildSize: 0.78,
+        maxChildSize: 0.96,
+        builder: (context, controller) {
+          return ListView(
+            controller: controller,
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(radius: 26, backgroundColor: file.color.withValues(alpha: 0.18), child: Icon(file.icon, color: file.color)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+                        Text(file.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              AspectRatio(
+                aspectRatio: file.isImage ? 4 / 3 : 16 / 9,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.65),
+                    border: Border.all(color: scheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _AttachmentPreviewBody(file: file),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              if (file.isDocument) ...[
+                Text('Reading position', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
+                Slider(
+                  value: position,
+                  min: 0,
+                  max: 100,
+                  divisions: 100,
+                  label: '${position.round()}%',
+                  onChanged: (value) => setState(() => position = value),
+                ),
+                Text('Libre Vault will reopen this document at ${position.round()}% next time.'),
+                const SizedBox(height: 16),
+              ],
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  FilledButton.icon(onPressed: widget.onShare, icon: const Icon(Icons.share_outlined), label: const Text('Share')),
+                  FilledButton.tonalIcon(onPressed: widget.onShareAs, icon: const Icon(Icons.ios_share_outlined), label: const Text('Share as')),
+                  FilledButton.tonalIcon(onPressed: widget.onExport, icon: const Icon(Icons.download_outlined), label: const Text('Export')),
+                  OutlinedButton.icon(onPressed: widget.onArchive, icon: const Icon(Icons.archive_outlined), label: const Text('Archive')),
+                  OutlinedButton.icon(onPressed: widget.onDelete, icon: const Icon(Icons.delete_outline), label: const Text('Delete')),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AttachmentPreviewBody extends StatelessWidget {
+  const _AttachmentPreviewBody({required this.file});
+
+  final AttachmentFile file;
+
+  @override
+  Widget build(BuildContext context) {
+    if (file.isImage && file.path != null && File(file.path!).existsSync()) {
+      return InteractiveViewer(child: Image.file(File(file.path!), fit: BoxFit.contain));
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(file.icon, size: 56, color: file.color),
+            const SizedBox(height: 12),
+            Text(file.kindLabel, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            Text(
+              file.path == null ? 'Preview metadata is available. Attach again to enable file export/share.' : 'Use Export or Share to open this file in a compatible app.',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2247,7 +2783,16 @@ class _SettingsSheet extends StatelessWidget {
             Text('Settings', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
             const SizedBox(height: 16),
             SettingBlock(
-              title: 'Theme',
+              title: 'Account',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(backgroundColor: home.accent, foregroundColor: Colors.white, child: const Icon(Icons.shield_outlined)),
+                title: const Text('Local vault'),
+                subtitle: const Text('No sign-in required. Notes stay on this device unless you export or share them.'),
+              ),
+            ),
+            SettingBlock(
+              title: 'Appearance',
               child: SegmentedButton<ThemeMode>(
                 segments: const [
                   ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.monitor_outlined), label: Text('Auto')),
@@ -2289,7 +2834,7 @@ class _SettingsSheet extends StatelessWidget {
               onChanged: home.onDenseNotesChanged,
             ),
             SettingBlock(
-              title: 'Accent color',
+              title: 'Theme',
               child: Wrap(
                 spacing: 10,
                 runSpacing: 10,
@@ -2304,6 +2849,55 @@ class _SettingsSheet extends StatelessWidget {
                         child: home.accent == color ? const Icon(Icons.check, color: Colors.white) : null,
                       ),
                     ),
+                ],
+              ),
+            ),
+            SettingBlock(
+              title: 'Background set',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'calm', icon: Icon(Icons.blur_on_outlined), label: Text('Calm')),
+                      ButtonSegment(value: 'flat', icon: Icon(Icons.crop_square_outlined), label: Text('Flat')),
+                      ButtonSegment(value: 'black', icon: Icon(Icons.contrast_outlined), label: Text('Black')),
+                    ],
+                    selected: {home.pureBlack ? 'black' : home.accentTintBackground ? 'calm' : 'flat'},
+                    onSelectionChanged: (value) {
+                      switch (value.first) {
+                        case 'black':
+                          home.onPureBlackChanged(true);
+                          home.onAccentTintChanged(false);
+                          break;
+                        case 'flat':
+                          home.onPureBlackChanged(false);
+                          home.onAccentTintChanged(false);
+                          break;
+                        default:
+                          home.onPureBlackChanged(false);
+                          home.onAccentTintChanged(true);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: home._chooseBackgroundVisual,
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('Image or GIF'),
+                      ),
+                      if (home.backgroundVisualPath != null)
+                        OutlinedButton.icon(
+                          onPressed: home._clearBackgroundVisual,
+                          icon: const Icon(Icons.clear),
+                          label: const Text('Clear visual'),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -2324,6 +2918,49 @@ class _SettingsSheet extends StatelessWidget {
                     home._setTrashRetentionDays(value);
                   }
                 },
+              ),
+            ),
+            SettingBlock(
+              title: 'Export',
+              child: DropdownButtonFormField<String>(
+                initialValue: home.preferredExportType,
+                decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Preferred note export type'),
+                items: const [
+                  DropdownMenuItem(value: 'md', child: Text('Markdown (.md)')),
+                  DropdownMenuItem(value: 'txt', child: Text('Plain text (.txt)')),
+                  DropdownMenuItem(value: 'html', child: Text('HTML (.html)')),
+                  DropdownMenuItem(value: 'json', child: Text('JSON (.json)')),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    home._setPreferredExportType(value);
+                  }
+                },
+              ),
+            ),
+            SettingBlock(
+              title: 'Accessibility',
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: const Text('Reading mode'),
+                    subtitle: const Text('Use larger, more relaxed preview text.'),
+                    value: home.readingMode,
+                    onChanged: home._setReadingMode,
+                  ),
+                  SwitchListTile(
+                    title: const Text('High contrast text'),
+                    subtitle: const Text('Prioritize stronger preview text contrast.'),
+                    value: home.highContrastText,
+                    onChanged: home._setHighContrastText,
+                  ),
+                  SwitchListTile(
+                    title: const Text('Reduce motion'),
+                    subtitle: const Text('Keep motion subtle for sensitive readers.'),
+                    value: home.reduceMotion,
+                    onChanged: home._setReduceMotion,
+                  ),
+                ],
               ),
             ),
             SettingBlock(
@@ -2747,7 +3384,7 @@ class Note {
       updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime.now(),
       wordCount: json['wordCount'] as int? ?? countWords(body),
       attachments: ((json['attachments'] as List<dynamic>?) ?? const [])
-          .map((name) => AttachmentFile.fromName(name as String))
+          .map((item) => AttachmentFile.fromJsonCompatible(item))
           .toList(),
       starred: json['starred'] as bool? ?? false,
       status: NoteStatus.fromJson(json['status']),
@@ -2795,7 +3432,7 @@ class Note {
       'body': body,
       'updatedAt': updatedAt.toIso8601String(),
       'wordCount': wordCount,
-      'attachments': attachments.map((file) => file.name).toList(),
+      'attachments': attachments.map((file) => file.toJson()).toList(),
       'starred': starred,
       'status': status.name,
       'trashedAt': trashedAt?.toIso8601String(),
@@ -2809,38 +3446,99 @@ class AttachmentFile {
     required this.meta,
     required this.icon,
     required this.color,
+    this.path,
+    this.sizeBytes,
+    this.archived = false,
   });
 
-  factory AttachmentFile.fromName(String name) {
+  factory AttachmentFile.fromJsonCompatible(Object item) {
+    if (item is Map<String, dynamic>) {
+      return AttachmentFile.fromName(
+        item['name'] as String? ?? 'Untitled file',
+        path: item['path'] as String?,
+        sizeBytes: item['sizeBytes'] as int?,
+        archived: item['archived'] as bool? ?? false,
+      );
+    }
+    if (item is Map) {
+      return AttachmentFile.fromJsonCompatible(Map<String, dynamic>.from(item));
+    }
+    return AttachmentFile.fromName(item.toString());
+  }
+
+  factory AttachmentFile.fromName(String name, {String? path, int? sizeBytes, bool archived = false}) {
     final lower = name.toLowerCase();
     if (lower.endsWith('.pdf')) {
-      return AttachmentFile(name: name, meta: 'PDF document', icon: Icons.picture_as_pdf_outlined, color: Colors.orange);
+      return AttachmentFile(name: name, meta: _fileMeta('PDF document', sizeBytes), icon: Icons.picture_as_pdf_outlined, color: Colors.orange, path: path, sizeBytes: sizeBytes, archived: archived);
     }
     if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp')) {
-      return AttachmentFile(name: name, meta: 'Image preview', icon: Icons.image_outlined, color: Colors.green);
+      return AttachmentFile(name: name, meta: _fileMeta('Image preview', sizeBytes), icon: Icons.image_outlined, color: Colors.green, path: path, sizeBytes: sizeBytes, archived: archived);
     }
     if (lower.endsWith('.m4a') || lower.endsWith('.mp3') || lower.endsWith('.wav')) {
-      return AttachmentFile(name: name, meta: 'Audio note', icon: Icons.graphic_eq, color: Colors.blue);
+      return AttachmentFile(name: name, meta: _fileMeta('Audio note', sizeBytes), icon: Icons.graphic_eq, color: Colors.blue, path: path, sizeBytes: sizeBytes, archived: archived);
     }
-    return AttachmentFile(name: name, meta: 'Linked file', icon: Icons.insert_drive_file_outlined, color: Colors.purple);
+    if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) {
+      return AttachmentFile(name: name, meta: _fileMeta('Spreadsheet', sizeBytes), icon: Icons.table_chart_outlined, color: Colors.green, path: path, sizeBytes: sizeBytes, archived: archived);
+    }
+    if (lower.endsWith('.ppt') || lower.endsWith('.pptx')) {
+      return AttachmentFile(name: name, meta: _fileMeta('Presentation', sizeBytes), icon: Icons.slideshow_outlined, color: Colors.deepOrange, path: path, sizeBytes: sizeBytes, archived: archived);
+    }
+    if (lower.endsWith('.doc') || lower.endsWith('.docx') || lower.endsWith('.rtf')) {
+      return AttachmentFile(name: name, meta: _fileMeta('Word document', sizeBytes), icon: Icons.description_outlined, color: Colors.blue, path: path, sizeBytes: sizeBytes, archived: archived);
+    }
+    return AttachmentFile(name: name, meta: _fileMeta('Linked file', sizeBytes), icon: Icons.insert_drive_file_outlined, color: Colors.purple, path: path, sizeBytes: sizeBytes, archived: archived);
   }
 
   factory AttachmentFile.fromPlatformFile(PlatformFile file) {
     final name = file.name.isEmpty ? 'Untitled file' : file.name;
-    final typed = AttachmentFile.fromName(name);
-    final size = file.size <= 0 ? 'Linked file' : formatBytes(file.size);
-    return AttachmentFile(
-      name: name,
-      meta: '${typed.meta} - $size',
-      icon: typed.icon,
-      color: typed.color,
-    );
+    return AttachmentFile.fromName(name, path: file.path, sizeBytes: file.size <= 0 ? null : file.size);
   }
 
   final String name;
   final String meta;
   final IconData icon;
   final Color color;
+  final String? path;
+  final int? sizeBytes;
+  final bool archived;
+
+  String get id => path ?? name;
+  bool get isImage => _extensionMatches(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+  bool get isDocument => _extensionMatches(['.pdf', '.doc', '.docx', '.rtf', '.xls', '.xlsx', '.csv', '.ppt', '.pptx']);
+  String get kindLabel {
+    if (_extensionMatches(['.pdf'])) return 'PDF document';
+    if (_extensionMatches(['.xls', '.xlsx', '.csv'])) return 'Spreadsheet';
+    if (_extensionMatches(['.ppt', '.pptx'])) return 'Presentation';
+    if (_extensionMatches(['.doc', '.docx', '.rtf'])) return 'Word document';
+    if (isImage) return 'Image';
+    return 'File';
+  }
+
+  bool _extensionMatches(List<String> extensions) {
+    final lower = name.toLowerCase();
+    return extensions.any(lower.endsWith);
+  }
+
+  AttachmentFile copyWith({bool? archived}) {
+    return AttachmentFile(
+      name: name,
+      meta: meta,
+      icon: icon,
+      color: color,
+      path: path,
+      sizeBytes: sizeBytes,
+      archived: archived ?? this.archived,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'path': path,
+      'sizeBytes': sizeBytes,
+      'archived': archived,
+    };
+  }
 }
 
 IconData folderIcon(String name, {bool selected = false}) {
@@ -2897,6 +3595,15 @@ String formatBytes(int bytes) {
   }
   final gb = mb / 1024;
   return '${gb.toStringAsFixed(gb >= 100 ? 0 : 1)} GB';
+}
+
+String _fileMeta(String type, int? bytes) {
+  return bytes == null ? type : '$type - ${formatBytes(bytes)}';
+}
+
+String safeFileName(String value) {
+  final cleaned = value.trim().replaceAll(RegExp(r'[\\/:*?"<>|]+'), '-');
+  return cleaned.isEmpty ? 'untitled-note' : cleaned;
 }
 
 const vaultStorageKey = 'libre_notes_vault_v1';
