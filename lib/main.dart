@@ -85,7 +85,7 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
         'accentTintBackground': accentTintBackground,
         'letterIcons': letterIcons,
         'denseNotes': denseNotes,
-        'accent': accent.value,
+        'accent': accent.toARGB32(),
       }));
     });
   }
@@ -451,7 +451,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
         'accentTintBackground': accentTintBackground,
         'letterIcons': letterIcons,
         'denseNotes': denseNotes,
-        'accent': accent.value,
+        'accent': accent.toARGB32(),
       },
       'notes': notes.map((note) => note.toJson()).toList(),
     });
@@ -970,7 +970,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _addAttachment() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       allowMultiple: true,
       withData: false,
       type: FileType.any,
@@ -1038,7 +1038,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _insertImage() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       allowMultiple: false,
       withData: false,
       type: FileType.image,
@@ -1127,7 +1127,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   Future<void> _exportBackup() async {
     final bytes = Uint8List.fromList(utf8.encode(_encodedVault()));
     final fileName = 'libre-notes-backup-${DateTime.now().millisecondsSinceEpoch}.json';
-    final path = await FilePicker.platform.saveFile(
+    final path = await FilePicker.saveFile(
       dialogTitle: 'Save Libre Notes backup',
       fileName: fileName,
       bytes: bytes,
@@ -1140,7 +1140,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _importBackup() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       dialogTitle: 'Restore Libre Notes backup',
       type: FileType.custom,
       allowedExtensions: ['json'],
@@ -2282,7 +2282,7 @@ class _SettingsSheet extends StatelessWidget {
             SettingBlock(
               title: 'Trash cleanup',
               child: DropdownButtonFormField<int>(
-                value: trashRetentionOptions.contains(home.trashRetentionDays) ? home.trashRetentionDays : 30,
+                initialValue: trashRetentionOptions.contains(home.trashRetentionDays) ? home.trashRetentionDays : 30,
                 decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Keep deleted notes for'),
                 items: const [
                   DropdownMenuItem(value: 1, child: Text('1 day')),
