@@ -2,17 +2,32 @@ __pycache__/
 *.py[cod]
 .libre_notes_settings.json
 sample_vault/
+
+# Web
+node_modules/
+dist/
+*.tsbuildinfo
+apps/web/node_modules/
+apps/web/dist/
+
+# Android/Gradle
+.gradle/
+local.properties
+apps/android/build/
+apps/android/.gradle/
+
+# Legacy Flutter prototype
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
 build/
-android/
-ios/
-linux/
-macos/
-web/
-windows/
+/android/
+/ios/
+/linux/
+/macos/
+/web/
+/windows/
 .idea/
 .metadata
 *.iml

@@ -1,53 +1,49 @@
 # Libre Notes
 
-Libre Notes is a local-first, Markdown-first notes app prototype. The current build target is Flutter, with GitHub Actions configured to build Web, Android debug APK, and Windows release artifacts.
+Libre Notes is a local-first, Markdown-first notes app. The current direction is a polished web design prototype first, followed by a native Android app in Kotlin and Jetpack Compose.
 
-## Current App
+## Repository Layout
 
-- Desktop-style three-pane notes workspace
-- Expandable folder dropdown tree
-- Colored first-letter folder icons, with settings toggle
-- Compact or rich note list modes
-- Raw Markdown editor
-- Rendered preview pane
-- Vertical filename attachment rows or large preview cards
-- Settings dialog inspired by VS Code structure
-- Light/dark quick toggle
-- AMOLED dark option
-- Accent color and accent-tinted background controls
+- `apps/web` - Vite, React, and TypeScript design prototype for first-run setup, vault status, editor, preview, exports, lock screen, and settings.
+- `apps/android` - Native Android app scaffold using Kotlin, Jetpack Compose, Material 3, app-layer/domain-layer/data-layer boundaries, vault crypto helpers, and export helpers.
+- `legacy/flutter-prototype` - Preserved Flutter prototype kept for reference while the native rebuild reaches parity.
+- `assets/brand/icon.jpg` - Libre Notes brand icon used by the web prototype and Android launcher.
 
-## Local Build
-
-Install Flutter in WSL or Windows first, then run:
+## Local Web Preview
 
 ```bash
-flutter create --project-name libre_notes --platforms=web,android,windows .
-flutter pub get
-flutter analyze
-flutter build web --release
+cd apps/web
+npm install
+npm run dev
 ```
 
-For Android:
+Build the web artifact:
 
 ```bash
-flutter build apk --debug
+cd apps/web
+npm run build
 ```
 
-For Windows:
+## Android Build
+
+The Android app is built from the repository root:
 
 ```bash
-flutter config --enable-windows-desktop
-flutter build windows --release
+gradle :apps:android:assembleDebug
 ```
+
+If Gradle is not installed locally, the GitHub workflow provisions Gradle and builds the debug APK automatically.
 
 ## GitHub Build
 
-Push this repo to GitHub and open the **Actions** tab. The `Flutter build` workflow installs Flutter, generates missing platform folders, analyzes the app, and uploads artifacts:
+GitHub Actions builds and uploads:
 
-- `libre-notes-web`
+- `libre-notes-web-preview`
 - `libre-notes-android-debug-apk`
-- `libre-notes-windows`
 
-## Development Note
+## Product Notes
 
-The source is intentionally dependency-light right now. It uses Flutter Material 3 only, so it can build cleanly in GitHub Actions before the app grows into file-system persistence, sync, PDF export, and markdown/LaTeX rendering packages.
+- The production Android app defaults to a selected folder plus an encrypted `libre-notes.vault` file.
+- Markdown export keeps the original source exactly.
+- HTML, DOC, and PDF exports render Markdown structure instead of wrapping raw Markdown as plain text.
+- Biometric unlock is treated as a fast unlock path after a password or PIN has been configured.

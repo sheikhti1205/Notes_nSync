@@ -115,7 +115,7 @@ class _LibreNotesAppState extends State<LibreNotesApp> {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Libre Vault',
+      title: 'Libre Notes',
       themeMode: themeMode,
       theme: ThemeData(
         useMaterial3: true,
@@ -223,7 +223,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             children: [
               LibreLogo(accent: widget.accent, size: 84),
               const SizedBox(height: 18),
-              const Text('Libre Vault', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+              const Text('Libre Notes', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
               const SizedBox(height: 22),
               SizedBox(
                 width: 180,
@@ -569,7 +569,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
     if (root == null || root.isEmpty) {
       return '';
     }
-    return '${root.replaceAll(RegExp(r'[\\/]+$'), '')}/libre_vault.${vaultEncrypted ? 'vault' : 'json'}';
+    return '${root.replaceAll(RegExp(r'[\\/]+$'), '')}/libre-notes.${vaultEncrypted ? 'vault' : 'json'}';
   }
 
   Future<String?> _readExternalVaultIfAvailable() async {
@@ -678,7 +678,7 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _chooseVaultFolder({bool encrypt = false}) async {
-    final path = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose Libre Vault folder');
+    final path = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose Libre Notes folder');
     if (path == null || path.isEmpty) {
       return;
     }
@@ -1330,8 +1330,8 @@ class _LibreNotesHomeState extends State<LibreNotesHome> with TickerProviderStat
   }
 
   Future<void> _shareAttachmentAs(AttachmentFile file) async {
-    final label = '${file.name}\nType: ${file.kindLabel}\nStored in Libre Vault';
-    await SharePlus.instance.share(ShareParams(title: 'Libre Vault file', subject: file.name, text: label));
+    final label = '${file.name}\nType: ${file.kindLabel}\nStored in Libre Notes';
+    await SharePlus.instance.share(ShareParams(title: 'Libre Notes file', subject: file.name, text: label));
   }
 
   Future<void> _exportAttachment(AttachmentFile file) async {
@@ -1990,7 +1990,7 @@ class _AppDrawer extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               const Expanded(
-                child: Text('Libre Vault', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -2093,7 +2093,7 @@ class _FolderRail extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               const Expanded(
-                child: Text('Libre Vault', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                child: Text('Libre Notes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
               ),
             ],
           ),
@@ -3107,7 +3107,7 @@ class _AttachmentPreviewSheetState extends State<AttachmentPreviewSheet> {
                   label: '${position.round()}%',
                   onChanged: (value) => setState(() => position = value),
                 ),
-                Text('Libre Vault will reopen this document at ${position.round()}% next time.'),
+                Text('Libre Notes will reopen this document at ${position.round()}% next time.'),
                 const SizedBox(height: 16),
               ],
               Wrap(
@@ -3169,7 +3169,7 @@ class _AttachmentPreviewBody extends StatelessWidget {
             Text(
               file.path == null
                   ? 'Preview metadata is available. Attach again to enable file export/share.'
-                  : 'Libre Vault can keep and organize this file here. PDF, image, Markdown, text, CSV, JSON, HTML, and code files preview directly; Office files show metadata until a native renderer is added.',
+                  : 'Libre Notes can keep and organize this file here. PDF, image, Markdown, text, CSV, JSON, HTML, and code files preview directly; Office files show metadata until a native renderer is added.',
               textAlign: TextAlign.center,
             ),
           ],
