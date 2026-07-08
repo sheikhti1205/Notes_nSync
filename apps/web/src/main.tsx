@@ -2,235 +2,321 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import {
   Archive,
-  BadgeCheck,
-  BookOpenText,
+  Bell,
+  BookLock,
+  BookOpen,
   Check,
-  ChevronRight,
+  ChevronDown,
+  Clock,
+  Cloud,
   Download,
-  Eye,
+  Edit3,
   FileText,
-  Fingerprint,
-  FolderLock,
+  Folder,
+  Hash,
+  Home,
+  Import,
   KeyRound,
-  LayoutDashboard,
-  LockKeyhole,
-  Moon,
-  Palette,
-  Paperclip,
+  Link2,
+  Lock,
+  MoreHorizontal,
+  PanelRight,
+  Plus,
+  RefreshCw,
   Search,
   Settings,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
+  Shield,
   Star,
-  Sun,
+  Tag,
+  Trash2,
   Upload,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { marked } from 'marked';
 import './styles.css';
 
-type SetupStep = readonly [
-  title: string,
-  detail: string,
-  Icon: LucideIcon,
+type NavItem = {
+  label: string;
+  Icon: LucideIcon;
+  active?: boolean;
+  count?: number;
+};
+
+type NoteCard = {
+  title: string;
+  preview: string;
+  notebook: string;
+  time: string;
+  words: number;
+  tags: string[];
+  starred?: boolean;
+  locked?: boolean;
+  active?: boolean;
+};
+
+const notes: NoteCard[] = [
+  {
+    title: 'The Meaning of Sync',
+    preview: 'A Drive-backed sync chain should feel invisible until a conflict needs review.',
+    notebook: 'Product / Sync',
+    time: '4h ago',
+    words: 274,
+    tags: ['sync', 'drive'],
+    starred: true,
+    active: true,
+  },
+  {
+    title: 'Conflict handling policy',
+    preview: 'Admins decide team conflicts. Personal workspaces can keep both automatically.',
+    notebook: 'Product / Security',
+    time: 'Yesterday',
+    words: 481,
+    tags: ['conflicts'],
+    locked: true,
+  },
+  {
+    title: 'Markdown import checklist',
+    preview: 'Import files, folders, ZIP archives, and preview raw Markdown like a PDF viewer.',
+    notebook: 'Imports',
+    time: '2d ago',
+    words: 166,
+    tags: ['markdown', 'import'],
+  },
+  {
+    title: 'Workspace profile fields',
+    preview: 'Cover image crop, profile picture crop, username, public name, device name.',
+    notebook: 'Identity',
+    time: '7d ago',
+    words: 309,
+    tags: ['profile'],
+  },
 ];
 
-const markdown = `# Project Roadmap
+const sidebar: NavItem[] = [
+  { label: 'Notes', Icon: Home, active: true, count: 18 },
+  { label: 'Favorites', Icon: Star, count: 3 },
+  { label: 'Reminders', Icon: Bell, count: 5 },
+  { label: 'Monographs', Icon: Upload },
+  { label: 'Vault', Icon: BookLock, count: 2 },
+  { label: 'Archive', Icon: Archive },
+  { label: 'Trash', Icon: Trash2 },
+];
 
-Libre Notes is a local-first Markdown notebook for focused writing.
+const notebooks = [
+  ['Product', '6'],
+  ['Sync', '4'],
+  ['Security', '3'],
+  ['Imports', '2'],
+];
 
-## This sprint
+const tags = ['sync', 'drive', 'conflicts', 'markdown', 'profile'];
 
-- [x] First-run presenter
-- [x] Encrypted vault setup
-- [ ] Android native parity
+const editorMarkdown = `# The Meaning of Sync
 
-> Notes should stay readable, portable, and private.
+A Drive-backed sync chain should feel like Notesnook-style sync: visible status, simple organization, and a focused editor.
 
-\`\`\`kotlin
-val vault = "libre-notes.vault"
-\`\`\`
+## NoteSnync decisions
+
+- Create sync chain is the primary setup action.
+- Restore is always visible beside create.
+- Google Drive is first, OneDrive follows.
+- App password, OAuth tokens, and device private keys never sync.
+- Admins resolve team conflicts with red/green diffs.
+
+> The UI should stay boring in the best way: sidebar, notes list, editor, and clear privacy status.
+
+[[Conflict handling policy]]
 `;
-
-const notes = [
-  { title: 'Project Roadmap', folder: 'Projects', tag: '#planning', words: 73, active: true },
-  { title: 'Privacy checklist', folder: 'Security', tag: '#vault', words: 112, active: false },
-  { title: 'Study outline', folder: 'Study', tag: '#markdown', words: 94, active: false },
-];
-
-const settings = [
-  ['Profile', 'Local display name and workspace identity'],
-  ['Vault & Security', 'Folder, encryption, PIN/password, biometric unlock'],
-  ['Appearance', 'Theme, accent color, density, motion'],
-  ['Editor', 'Markdown assist, preview behavior, attachment display'],
-  ['Export', 'Default format and rendered export choices'],
-  ['Backup/Restore', 'Encrypted vault file and recovery actions'],
-  ['About', 'Libre Notes version, license, and build details'],
-];
-
-const setupSteps: SetupStep[] = [
-  ['Choose folder', 'Documents/Libre Notes', FolderLock],
-  ['Create PIN or password', 'Digits now, symbols optional', KeyRound],
-  ['Enable fingerprint', 'Fast unlock after password', Fingerprint],
-  ['Pick preferences', 'Theme, accent, export defaults', Palette],
-];
 
 function App() {
   return (
-    <main>
-      <header className="topbar">
-        <div className="brand">
+    <main className="app-shell">
+      <aside className="left-rail">
+        <div className="brand-row">
           <img src="/icon.jpg" alt="" />
           <div>
-            <strong>Libre Notes</strong>
-            <span>native rebuild preview</span>
+            <strong>NoteSnync</strong>
+            <span>Privacy for everyone</span>
           </div>
         </div>
-        <nav>
-          <button className="ghost"><Search size={18} /> Search</button>
-          <button className="ghost"><Moon size={18} /> Dark</button>
-          <button className="primary"><Download size={18} /> Export</button>
-        </nav>
-      </header>
 
-      <section className="hero">
-        <div className="hero-copy">
-          <span className="eyebrow"><Sparkles size={16} /> First-run presenter</span>
-          <h1>Libre Notes</h1>
-          <p>
-            A private Markdown workspace that opens with a clear setup path, stores notes in one encrypted vault file,
-            and exports rendered documents without losing structure.
-          </p>
-          <div className="hero-actions">
-            <button className="primary"><FolderLock size={18} /> Set up encrypted vault</button>
-            <button className="secondary"><Eye size={18} /> Preview workspace</button>
-          </div>
-        </div>
-        <div className="setup-panel" aria-label="Setup checklist">
-          <div className="panel-title">
-            <ShieldCheck />
-            <div>
-              <strong>Setup</strong>
-              <span>Required before first vault use</span>
-            </div>
-          </div>
-          {setupSteps.map(([title, detail, Icon], index) => (
-            <div className="step" key={title}>
-              <span className={index < 2 ? 'done' : ''}>{index < 2 ? <Check size={14} /> : index + 1}</span>
+        <button className="new-note"><Plus size={18} /> New note</button>
+
+        <label className="search-box">
+          <Search size={17} />
+          <input placeholder="Search notes" />
+        </label>
+
+        <nav className="nav-group">
+          {sidebar.map(({ label, Icon, active, count }) => (
+            <button className={active ? 'nav-item active' : 'nav-item'} key={label}>
               <Icon size={18} />
-              <div>
-                <strong>{title}</strong>
-                <small>{detail}</small>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="workspace">
-        <aside className="sidebar">
-          <div className="vault-card">
-            <LockKeyhole />
-            <strong>libre-notes.vault</strong>
-            <span>Encrypted, selected folder</span>
-          </div>
-          {['All Notes', 'Projects', 'Security', 'Study', 'Archive'].map((item) => (
-            <button className={item === 'Projects' ? 'nav-item active' : 'nav-item'} key={item}>
-              <LayoutDashboard size={18} /> {item}
+              <span>{label}</span>
+              {count ? <small>{count}</small> : null}
             </button>
           ))}
-        </aside>
+        </nav>
 
-        <section className="note-list">
-          <div className="section-head">
-            <div>
-              <strong>Notes</strong>
-              <span>Markdown-first, local-first</span>
-            </div>
-            <button className="icon"><Star size={17} /></button>
+        <div className="sidebar-section">
+          <div className="section-label">
+            <span>Notebooks</span>
+            <Plus size={15} />
           </div>
+          {notebooks.map(([name, count]) => (
+            <button className="tree-item" key={name}>
+              <Folder size={16} />
+              <span>{name}</span>
+              <small>{count}</small>
+            </button>
+          ))}
+        </div>
+
+        <div className="sidebar-section">
+          <div className="section-label">
+            <span>Tags</span>
+            <Plus size={15} />
+          </div>
+          {tags.map((tag) => (
+            <button className="tree-item" key={tag}>
+              <Hash size={16} />
+              <span>{tag}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="sync-card">
+          <div>
+            <Cloud size={17} />
+            <strong>Google Drive</strong>
+          </div>
+          <span>Synced just now</span>
+          <button><RefreshCw size={15} /> Sync now</button>
+        </div>
+
+        <div className="rail-footer">
+          <button><Import size={17} /> Import</button>
+          <button><Settings size={17} /> Settings</button>
+        </div>
+      </aside>
+
+      <section className="notes-pane">
+        <header className="pane-header">
+          <div>
+            <strong>Notes</strong>
+            <span>18 notes</span>
+          </div>
+          <button><ChevronDown size={17} /> Updated</button>
+        </header>
+
+        <div className="setup-strip">
+          <Shield size={18} />
+          <div>
+            <strong>Create sync chain</strong>
+            <span>Restore or local-only remains available in setup.</span>
+          </div>
+          <button>Create</button>
+        </div>
+
+        <div className="note-list">
           {notes.map((note) => (
             <article className={note.active ? 'note-card active' : 'note-card'} key={note.title}>
-              <strong>{note.title}</strong>
-              <p>{note.folder} · {note.tag} · {note.words} words</p>
+              <div className="note-title-row">
+                <strong>{note.title}</strong>
+                <span>{note.starred ? <Star size={15} /> : note.locked ? <Lock size={15} /> : null}</span>
+              </div>
+              <p>{note.preview}</p>
+              <footer>
+                <span>{note.notebook}</span>
+                <span>{note.time}</span>
+              </footer>
+              <div className="tag-row">
+                {note.tags.map((tag) => <i key={tag}>#{tag}</i>)}
+              </div>
             </article>
           ))}
-        </section>
-
-        <section className="editor">
-          <div className="section-head">
-            <div>
-              <strong>Editor</strong>
-              <span>Raw Markdown stays portable</span>
-            </div>
-            <div className="segmented"><button>Edit</button><button>Preview</button></div>
-          </div>
-          <pre>{markdown}</pre>
-        </section>
-
-        <section className="preview">
-          <div className="section-head">
-            <div>
-              <strong>Preview</strong>
-              <span>Shared export renderer</span>
-            </div>
-            <BookOpenText size={20} />
-          </div>
-          <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(markdown) }} />
-        </section>
+        </div>
       </section>
 
-      <section className="lower-grid">
-        <article className="card export-card">
-          <div className="section-head">
-            <div>
-              <strong>Rendered exports</strong>
-              <span>Markdown, HTML, PDF, DOC</span>
+      <section className="editor-pane">
+        <header className="editor-toolbar">
+          <div className="title-cluster">
+            <h1>The Meaning of Sync</h1>
+            <div className="note-meta">
+              <span><Clock size={14} /> Mon, Jul 06, 2026, 2:58 PM</span>
+              <span><Check size={14} /> Saved</span>
+              <span>274 words</span>
             </div>
-            <Upload />
           </div>
-          {['Markdown source is exact', 'HTML renders headings, lists, code, quotes', 'PDF/DOC use the same structure pipeline'].map((item) => (
-            <p className="checkline" key={item}><BadgeCheck size={17} /> {item}</p>
-          ))}
-        </article>
+          <div className="toolbar-actions">
+            <button><Star size={17} /></button>
+            <button><Lock size={17} /></button>
+            <button><MoreHorizontal size={18} /></button>
+          </div>
+        </header>
 
-        <article className="card lock-card">
-          <div className="phone">
-            <Smartphone size={22} />
-            <Fingerprint size={54} />
-            <strong>Unlock Libre Notes</strong>
-            <span>Fingerprint or password after phone lock</span>
-            <div className="pin"><i /><i /><i /><i /></div>
-          </div>
-        </article>
+        <div className="editor-tabs">
+          <button className="selected"><Edit3 size={16} /> Editor</button>
+          <button><BookOpen size={16} /> Preview</button>
+          <button><Link2 size={16} /> Backlinks</button>
+        </div>
 
-        <article className="card settings-card">
-          <div className="section-head">
-            <div>
-              <strong>Settings</strong>
-              <span>Structured for growth</span>
-            </div>
-            <Settings />
-          </div>
-          <div className="settings-list">
-            {settings.map(([title, detail]) => (
-              <div key={title}>
-                <FileText size={17} />
-                <span><strong>{title}</strong><small>{detail}</small></span>
-                <ChevronRight size={16} />
-              </div>
-            ))}
-          </div>
-        </article>
+        <div className="tag-editor">
+          <Tag size={16} />
+          <span>#sync</span>
+          <span>#drive</span>
+          <button>Add a tag...</button>
+        </div>
 
-        <article className="card tokens-card">
-          <strong>Shared design tokens</strong>
-          <div className="swatches"><i /><i /><i /><i /></div>
-          <p>These colors, radii, spacing, density rules, and controls are intended to be matched in the native Android app.</p>
-          <div className="toolbar"><Sun /><Moon /><Paperclip /><Archive /></div>
-        </article>
+        <article className="document" dangerouslySetInnerHTML={{ __html: marked.parse(editorMarkdown) }} />
+
+        <footer className="statusbar">
+          <span>16px</span>
+          <span>Paragraph</span>
+          <span>Sans-serif</span>
+          <span>Encrypted locally before Drive upload</span>
+        </footer>
       </section>
+
+      <aside className="right-panel">
+        <header>
+          <strong>Properties</strong>
+          <PanelRight size={18} />
+        </header>
+
+        <div className="property-card profile">
+          <div className="avatar"><UserRound size={28} /></div>
+          <strong>Sheikh</strong>
+          <span>@sheikh · Admin</span>
+        </div>
+
+        <div className="property-card">
+          <strong>Sync chain</strong>
+          <p><Cloud size={15} /> Google Drive</p>
+          <p><KeyRound size={15} /> Admin policy signed</p>
+          <p><Shield size={15} /> Private secrets stay local</p>
+        </div>
+
+        <div className="property-card">
+          <strong>Notebook</strong>
+          <p><Folder size={15} /> Product / Sync</p>
+          <p><FileText size={15} /> Linked in 2 notebooks</p>
+        </div>
+
+        <div className="property-card conflict">
+          <strong>Conflict review</strong>
+          <p className="removed">- Resolve conflicts silently</p>
+          <p className="added">+ Admin reviews red/green diff</p>
+          <button>Open conflict center</button>
+        </div>
+
+        <div className="property-card">
+          <strong>Setup</strong>
+          <button><Upload size={16} /> Create sync chain</button>
+          <button><Download size={16} /> Restore chain</button>
+          <button><Folder size={16} /> Local only</button>
+        </div>
+      </aside>
     </main>
   );
 }

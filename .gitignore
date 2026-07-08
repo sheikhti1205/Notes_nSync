@@ -12,6 +12,7 @@ apps/web/dist/
 
 # Android/Gradle
 .gradle/
+.kotlin/
 local.properties
 apps/android/build/
 apps/android/.gradle/

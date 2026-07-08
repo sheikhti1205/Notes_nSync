@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Light-theme launcher background: soft light surface behind the transparent N cutout. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="14" android:startY="8"
+                android:endX="96" android:endY="100">
+                <item android:offset="0.0" android:color="#FFFDFCFF" />
+                <item android:offset="1.0" android:color="#FFEDE6FA" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- faint top-left sheen -->
+    <path android:pathData="M0,0 h108 v54 h-108 z" android:fillColor="#14FFFFFF" />
+</vector>

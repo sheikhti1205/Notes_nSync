@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive icon background color -->
+    <color name="notesnync_icon_bg">#0F0A24</color>
+    <color name="notesnync_icon_bg_light">#F0EAF8</color>
+
+    <!-- Light-theme splash background (dark override lives in values-night) -->
+    <color name="splash_bg">#FFF3EEFB</color>
+</resources>
