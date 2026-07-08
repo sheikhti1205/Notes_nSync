@@ -1049,6 +1049,7 @@ private fun EditorBottomToolbar(
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(max = maxLineWidth)
+            .imePadding()
             .navigationBarsPadding()
             .horizontalScroll(scroll),
         shape = RoundedCornerShape(16.dp),

@@ -1651,7 +1651,7 @@ private fun CanvasTool(icon: androidx.compose.ui.graphics.vector.ImageVector, la
 fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment: () -> Unit = {}) {
     var message by remember { mutableStateOf("") }
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    Column(Modifier.fillMaxSize().imePadding()) {
+    Column(Modifier.fillMaxSize()) {
         // Message list grows to fill; input pinned at the bottom above the keyboard.
         val messages = state.chatMessages
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -1675,6 +1675,7 @@ fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment:
         Surface(
             Modifier
                 .fillMaxWidth()
+                .imePadding()
                 .navigationBarsPadding(),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 8.dp,
