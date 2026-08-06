@@ -1,4 +1,4 @@
-name: Libre Notes build
+name: Notes’nync build
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
       - name: Upload web artifact
         uses: actions/upload-artifact@v6
         with:
-          name: libre-notes-web-preview
+          name: notesnync-web-preview
           path: apps/web/dist
 
   android:
@@ -67,5 +67,5 @@ jobs:
       - name: Upload Android APK
         uses: actions/upload-artifact@v6
         with:
-          name: libre-notes-android-debug-apk
+          name: notesnync-android-debug-apk
           path: apps/android/build/outputs/apk/debug/*.apk

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Theme-adaptive translucent surface (light: drawable, dark: drawable-night). -->
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <!-- The transparent N cutout, centred in the safe zone. -->
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- Single-colour layer for Android 13+ themed icons. -->
+    <monochrome android:drawable="@drawable/notesnync_icon_monochrome" />
+</adaptive-icon>

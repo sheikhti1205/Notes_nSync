@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Notes'nync launcher foreground — faithful to file_00000000f0ac71f7a1a5971f6a3bee38.png:
+  a bold pill "N" (violet left bar -> bright-pink diagonal -> blue right bar with a
+  translucent curl) plus three gradient list bars. Kept inside the 66dp safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft glow behind the mark -->
+    <path
+        android:pathData="M50,54 m-30,0 a30,30 0,1 1,60 0 a30,30 0,1 1,-60 0"
+        android:fillAlpha="0.12"
+        android:fillColor="#FFB37DFF" />
+
+    <!-- Left violet bar -->
+    <path
+        android:pathData="M31,30 L31,82"
+        android:strokeWidth="14"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="31" android:startY="30"
+                android:endX="31" android:endY="82">
+                <item android:offset="0.0" android:color="#FFB877FF" />
+                <item android:offset="1.0" android:color="#FF8236EC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Right blue bar -->
+    <path
+        android:pathData="M60,30 L60,68"
+        android:strokeWidth="14"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="60" android:startY="30"
+                android:endX="60" android:endY="70">
+                <item android:offset="0.0" android:color="#FF7D9BFF" />
+                <item android:offset="1.0" android:color="#FF7A54E6" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Translucent curl off the right bar -->
+    <path
+        android:pathData="M60,70 C63,84 74,82 75,68"
+        android:strokeWidth="11"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="60" android:startY="80"
+                android:endX="76" android:endY="68">
+                <item android:offset="0.0" android:color="#CCC86BF2" />
+                <item android:offset="1.0" android:color="#B38A5CF0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Bright pink diagonal (drawn on top where it crosses the bars) -->
+    <path
+        android:pathData="M31,29 L60,83"
+        android:strokeWidth="16"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="31" android:startY="29"
+                android:endX="60" android:endY="83">
+                <item android:offset="0.0" android:color="#FFF6BCFF" />
+                <item android:offset="0.55" android:color="#FFEC7BF6" />
+                <item android:offset="1.0" android:color="#FFD64BF0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Three gradient list bars -->
+    <path android:pathData="M70,43 L85,43" android:strokeWidth="5.6" android:strokeLineCap="round" android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="70" android:startY="43" android:endX="85" android:endY="43">
+                <item android:offset="0.0" android:color="#FFB877F2" />
+                <item android:offset="1.0" android:color="#FFDD5CF2" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M70,52 L85,52" android:strokeWidth="5.6" android:strokeLineCap="round" android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="70" android:startY="52" android:endX="85" android:endY="52">
+                <item android:offset="0.0" android:color="#FF8A72F0" />
+                <item android:offset="1.0" android:color="#FF6F92F5" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M70,61 L85,61" android:strokeWidth="5.6" android:strokeLineCap="round" android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="70" android:startY="61" android:endX="85" android:endY="61">
+                <item android:offset="0.0" android:color="#FF5B8EF5" />
+                <item android:offset="1.0" android:color="#FF46CAF0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

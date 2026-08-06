@@ -14,6 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LibreNotes"
+rootProject.name = "NotesNync"
 include(":apps:android")
-

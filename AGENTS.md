@@ -1,0 +1,115 @@
+# Notes'nync Agent Tracking
+
+## Current UI Acceptance Notes
+- Product direction is now a private workspace operating system: workspace hub first, notes/tasks/canvas/chat/files/databases/graph/activity connected by shared objects.
+- Use the supplied `notes_nync_v4_adaptive.html` as the logo animation source.
+- The splash/loading logo must be centered by the icon stage, not shifted upward by surrounding preview controls or title text.
+- Launcher/in-app icon geometry must derive from the HTML logo path and final line positions.
+- Overall Android UI should lean toward the new dark premium dashboard references: dark navy base, compact glass cards, purple/pink/blue identity gradient, workspace banners, and stronger micro-interactions.
+- The app should open to a Workspace Hub, not directly to Notes.
+- Notesnook is a reference for side navigation behavior, but the target sidebar is workspace-first: workspace switcher, pinned, recent, smart collections, inbox, notes, tasks, calendar, canvas, files, chat, graph, activity, templates, and settings.
+- Avoid fixed-size assumptions on phones; controls must wrap or stack before text clips.
+- Task rows must stay compact, stack metadata/actions on narrow phones, and keep status changes visible without cramping the card.
+- Canvas must avoid fixed pixel offsets. Nodes use normalized layout, overlap avoidance, routed/bent connectors, and block-level connection controls.
+- Editor needs a Markleaf-like writing surface: cleaner top actions, readable markdown editing, bottom formatting actions, and better preview rendering.
+- Settings needs the new nested structure: Profile, Workspace, Appearance, Editor & Markdown, Security & Vault, Account & Restore, Backup & Import, App Info, Workspace Icon, Workspace Background, Permissions, Sync Settings, and Conflict Resolution. Exclude plan, billing, and sites.
+- Add Universal Command Palette and Spotlight Search as first-class surfaces, not just a notes search box.
+- Rich empty states should include illustrations, quick actions, import, capture, and restore paths.
+- Adaptive FAB must change actions by section: note, task, canvas board, chat, file/import, and capture.
+
+## Implementation Constraints
+- Google account restore is the preferred beginner-friendly sync direction.
+- Use Google Drive `appDataFolder` with encrypted Notes'nync snapshots for automatic restore.
+- The current Android AppAuth bridge uses only the public Android client ID. Do not embed the OAuth client secret in the APK.
+- Production Google auth should move toward Credential Manager for sign-in plus Google AuthorizationClient for Drive access.
+- Folder-provider Drive/OneDrive/local sync remains an advanced/manual fallback.
+- OneDrive API/account restore comes after Google restore is stable.
+- App data added to Room must be included in backup and encrypted sync snapshots.
+- UI changes must keep compact phone, tablet, and desktop-class layouts usable.
+- New backend tables should move toward a shared workspace object/reference/activity/history layer instead of isolated feature silos.
+- Sync, backup, and conflict handling must include all new object-layer data.
+
+## Recently Fixed
+- HTML loading asset is used directly.
+- Folder-provider encrypted sync chain exists.
+- Tasks, chat, canvas, profile, workspace, import, and attachment metadata are persisted and included in encrypted backups/sync.
+- Google Drive AppAuth wiring uses the current Android client ID and requests identity plus `drive.appdata` scopes.
+- Sync conflict reports now use structured v2 JSON with local/remote snapshot summaries and changed object lists for folder-provider and Google Drive API sync.
+- Conflict Review can load generated folder-provider or Google Drive conflict reports, then show local/remote snapshot summaries, recent objects, red/green changed lists, and a "Use local next sync" resolution path.
+- Canvas now uses world-space pan/zoom with fit controls and constrained drift so users can expand the board without getting permanently lost off-content.
+- Supplied landscape images are embedded as built-in cover/background resources and exposed for workspace/profile visual selection.
+- Local diagnostics logging, crash detection, post-crash share prompt, and a Diagnostics settings page exist without third-party analytics.
+- Canvas nodes can be tapped to view/edit their contents and linked-note preview.
+- Canvas link/file/media nodes persist target URI, MIME type, display name, and size metadata.
+- Canvas connectors use orthogonal candidate routing that tries to avoid node blocks before falling back.
+- Canvas node details expose current incoming/outgoing connections, add-connection controls, and remove-connection actions.
+- Workspace Hub is the default destination and has native dashboard cards.
+- Shared workspace object, object link, activity, and file tables exist in Room schema 14.
+- Object/activity/file records are included in encrypted backup/sync snapshots.
+- Room schema 14 adds workspace object history and comments.
+- Object history/comment records are included in encrypted backup/sync snapshots.
+- Note edits, task status moves, attachments, canvas links, chat messages, uploads, and object comments write shared history/activity records.
+- Note attachments, editor embeds, canvas edges, linked canvas notes, and canvas file/media targets now create workspace object links for graph/backlink views.
+- Files, Database, Graph, Activity, Templates, Inbox, and Command Palette screens exist as first-pass native surfaces.
+- Object Detail is a first-class destination with source preview, backlinks, comments, history, comment creation, and open-source-object action.
+- Database rows, Graph chips, Search results, and Command Palette object results open the Object Detail destination.
+- Database now has searchable Table, List, Board, Gallery, and Timeline views over shared workspace objects.
+- Canvas block edits update their indexed workspace object title/summary with activity/history records.
+- Canvas block details can jump directly into the shared Object Detail view.
+- Search is now a Spotlight-style cross-object search across workspace objects, tags, and command/settings surfaces.
+- Note long-press and swipe actions are configurable in settings.
+- Task Kanban cards expose compact visible status-move controls.
+- Editor toolbar exposes checklist, table, divider, attachment, embed, and cover actions.
+- Editor now has local undo/redo, explicit save, a read-only source/code viewing toggle, and a collapsible draggable floating formatting toolbar constrained to the screen.
+- Editor now defaults to an AppFlowy/AFFiNE-inspired Page mode: markdown stays as the stored source, but headings, paragraphs, lists, checklists, quotes, code, rules, and image-markdown render as editable visual blocks.
+- Editor mode navigation is now Page, Source, and Preview; Back returns Source/Preview to Page before leaving the note.
+- Chat input now switches between IME and navigation-bar padding so it sits just above the keyboard instead of being pushed too far upward.
+- Canvas has a Wide focus mode that requests landscape orientation, expands the board surface, and provides Back/Exit controls with orientation restoration.
+- Main app shell no longer renders the global `Home`/`Notes`/`Editor` title top bar; compact and expanded layouts now leave immersive screen headers to each destination.
+- Compact bottom navigation now includes a `Menu` entry that opens the section sidebar without restoring the old global top bar.
+- Editor mode controls and note actions are split into separate scrollable rows so Save/media/archive/delete controls do not clip off-screen on narrow phones.
+- Workspace visual dialogs now use bounded scrollable content and compact picker rows so Save/Cancel and image/background controls remain reachable on narrow phones.
+- Sidebar notebook rows now filter the Notes screen, highlight the active notebook, and show a removable active notebook filter chip in Notes.
+- Profile picture and profile cover rows now open Android image picker directly instead of requiring manual URI entry.
+- Note media insertion is now inline: Page mode exposes image/file/embed/note-link controls inside the editor surface, and Source mode image insertion opens Android's image picker and writes markdown image syntax.
+- Note attachment/embed cards now live inline in Page/Preview surfaces with image thumbnails plus Open/Share actions for in-app/outside-app viewing.
+- Note cover changes are constrained to Preview mode; cover renders as part of the scrollable preview document instead of as a separate editor block.
+- In-app static logo surfaces now use the supplied `1000011037_cutout.png` asset as `notesnync_cutout`.
+- Task Kanban is now a horizontal Trello-style board with status columns and task cards, plus a dedicated task Timeline view.
+- Editor embeds now expose recent-note chips that insert `[[note title]]` links into the current note.
+- Preview mode now renders attached images and image embeds above the markdown body.
+- Manifest now declares `windowSoftInputMode="adjustResize"` for the main activity so editor/chat bottom bars can respond to IME insets reliably.
+- Workspace Hub includes a first-run create/restore/import setup card.
+- Activity screen is now a timeline-style `My Activity` feed over activity and object history.
+- Profile and Workspace settings now show banner cards with stored image/background URIs and gradient fallbacks.
+- Notes support long-press quick actions.
+- Biometric unlock now guards prompt crashes and avoids repeated automatic prompt loops.
+- Compact chat no longer receives the global floating create button.
+- Notes Home no longer shows the older quick-action block.
+- Destination changes now crossfade at the app-shell boundary.
+- Note cards and Kanban task cards animate content-size changes for smoother interaction feedback.
+- Chat and editor bottom bars now use screen-level IME padding plus navigation-bar padding so controls stay above the keyboard more reliably.
+- Task Kanban columns now support inline card creation in each status column.
+- Task Kanban cards can be long-pressed and dragged left/right to move to adjacent status columns.
+- Task Kanban now has persisted task boards and task columns in Room schema 16, with backup/sync snapshot coverage and conflict-report visibility.
+- Tasks can be created directly inside a persisted column, and long-press drag moves cards between adjacent persisted columns.
+
+## Still To Verify Manually
+- Workspace Hub, command palette, object graph, files library, database views, Object Detail, and activity feed need real-device visual/interaction QA and deeper feature completion.
+- Sync-chain visualization is not implemented yet.
+- Actual launcher icon appearance on Android launchers after adaptive mask application.
+- Splash centering on narrow/tall devices.
+- Canvas pan/zoom, fit-to-content, routing, and connection ergonomics on real touch devices.
+- Built-in covers need APK-size review and final curation/compression.
+- Diagnostics sharing needs real-device crash/ANR validation.
+- Full editor comfort against Markleaf reference screenshots.
+- Editor floating toolbar drag/click behavior and keyboard retention need real-device validation with Gboard and other keyboards.
+- Page editor block editing needs real-device QA for cursor behavior, block deletion, large documents, and markdown round-trip edge cases.
+- Local APK preview is currently blocked in the local toolchain because ADB sees no connected devices and no Android emulator/AVD is installed in the visible Windows/WSL SDK paths.
+- Canvas Wide focus orientation restore and Back behavior need validation on phones, tablets, and foldables.
+- New no-global-header shell needs screenshot QA across all destinations to catch any status-bar crowding.
+- Trello-style Kanban long-press drag needs real-device QA; current drag moves cards to adjacent columns by horizontal direction.
+- Task board column rename/delete/reorder is not implemented yet.
+- Real-device Google consent/redirect behavior against debug and release signing fingerprints.
+- Conflict review still needs per-object/per-field merge controls, keep-both flow, and remote-wins restore action polish.
+- Actual swipe/long-press ergonomics on narrow Android devices.
